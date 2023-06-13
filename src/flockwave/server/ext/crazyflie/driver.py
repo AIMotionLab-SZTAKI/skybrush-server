@@ -1195,35 +1195,55 @@ class CrazyflieUAV(UAVBase):
         self._show_execution_stage = DroneShowExecutionStage.UNKNOWN
         self._velocity = VelocityXYZ()
 
+    def _print_log(self, message):
+        print(repr(message.items))
+
     def _setup_logging_session(self) -> LogSession:
         """Sets up the log blocks that contain the variables we need from the
         Crazyflie, and returns a LogSession object.
         """
         assert self._crazyflie is not None
 
+
         session = self._crazyflie.log.create_session()
         session.configure(graceful_cleanup=True)
+
+        # session.create_block(
+        #     "stateEstimate.qx",
+        #     "stateEstimate.qy",
+        #     "stateEstimate.qz",
+        #     "stateEstimate.qw",
+        #     period=0.2,
+        #     handler=self._print_log,
+        # )
+        # return session
+        #
+        # session.create_block(
+        #     "ctrlGeom.cmd_pitch",
+        #     "Lqr.cmd_pitch",
+        #     period=0.2,
+        #     handler=self._print_log,
+        # )
+        # return session
+
+        return session
+        session.create_block(
+            "load_pose.x",
+            "load_pose.y",
+            "load_pose.z",
+            period=0.2,
+            handler=self._print_log,
+        )
         return session
 
-        session.create_block(
-            "pm.vbat",
-            "pm.state",
-            "sys.armed",
-            period=1,
-            handler=self._on_battery_and_system_state_received,
-        )
-        session.create_block(
-            "stateEstimateZ.x",
-            "stateEstimateZ.y",
-            "stateEstimateZ.z",
-            "stateEstimateZ.vx",
-            "stateEstimateZ.vy",
-            "stateEstimateZ.vz",
-            "stateEstimate.yaw",
-            period=1,
-            handler=self._on_position_velocity_info_received,
-        )
-        return session
+        # session.create_block(
+        #     "ctrlLqr1Dof.alpha",
+        #     "ctrlLqr1Dof.dalpha",
+        #     "ctrlLqr1Dof.cmd_pitch",
+        #     period=0.2,
+        #     handler=self._print_log,
+        # )
+        # return session
 
     def _update_error_codes(self) -> None:
         """Updates the set of error codes based on what we know about the current

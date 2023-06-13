@@ -61,6 +61,9 @@ compose = "^1.1.1"
 adrenaline = "^1.1.0"
 httpx = ">=0.18.2"
 igrf-model = "^1.1.1"
+motioncapture = { file = "../libmotioncapture/dist/motioncapture-1.0a1-cp310-cp310-linux_x86_64.whl"}
+numpy = "^1.23.1"
+scipy = "^1"
 
 [tool.poetry.dev-dependencies]
 coverage = {extras = ["toml"], version = "^7.1.0"}

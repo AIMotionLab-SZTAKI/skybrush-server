@@ -153,6 +153,7 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
                     # Create a function that enqueues a packet for broadcasting
                     # over the given connection
                     broadcaster = partial(nursery.start_soon, connection.broadcast)
+                    self._broadcaster = broadcaster
 
                     # Create a dedicated LED manager for the connection
                     led_manager = CrazyflieLEDLightConfigurationManager(broadcaster)
@@ -264,6 +265,15 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
         # Send the configuration to the driver to handle it
         led_manager.notify_config_changed(config)
 
+############################################################################
+    def broadcast(self, port, channel, packet) -> None:
+        self._broadcaster(port, channel, packet)
+
+    def exports(self):
+        return {
+            "broadcast" : self.broadcast,
+        }
+#############################################################################
 
 construct = CrazyflieDronesExtension
 schema = {

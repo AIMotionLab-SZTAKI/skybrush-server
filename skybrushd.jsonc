@@ -1,0 +1,78 @@
+{
+  "EXTENSIONS": {
+    "crazyflie": {
+      "connections": [
+        "crazyradio://0/80/2M/E7E7E7E7",
+      ],
+      "enabled": true
+    },
+    "aimotionlab": {
+      "channel": 1,
+      "configWord": "This is a config word for the aimotionlab extension",
+      "enabled": true,
+      "memory_partitions": [
+        {
+          "ID": 0,
+          "size": 100,
+          "start": 1
+        },
+        {
+          "ID": 1,
+          "size": 50,
+          "start": 101
+        },
+        {
+          "ID": 2,
+          "size": 1950,
+          "start": 151
+        },
+        {
+          "ID": 3,
+          "size": 1950,
+          "start": 2141
+        }
+      ],
+      "port": 1
+    },
+    "libmotioncapture": {
+      "connections": [
+        {
+          "hostname": "192.168.1.141",
+          "type": "optitrack"
+        }
+      ],
+      "enabled": true
+    },
+    "lps": {
+      "enabled": true
+    },
+    "motion_capture": {
+      "enabled": true,
+      "frame_rate": 100,
+      "mapping": {
+        "rules": [
+          {
+            "type": "strip_prefix",
+            "value": "cf"
+          },
+          {
+            "type": "strip_prefix",
+            "value": "bb"
+          },
+          {
+            "type": "strip_prefix",
+            "value": "RC_car_"
+          },
+          {
+            "type": "strip_prefix",
+            "value": "AI_car_"
+          },
+          {
+            "type": "strip_prefix",
+            "value": "Trailer_"
+          }
+        ]
+      }
+    }
+  }
+}
