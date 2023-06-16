@@ -1,4 +1,4 @@
-from time import time
+from time import  time
 from typing import List, Tuple
 from flockwave.server.utils import chunks
 from flockwave.server.ext.motion_capture import MotionCaptureFrame
@@ -16,7 +16,6 @@ class AiMotionMocapFrameHandler:
         self._port = port
         self._channel = channel
         self._cur_id = 0
-        self._prev_poses: List[List[Tuple[int, Tuple[float, float, float], QuaternionXYZW]]] = []
 
     def notify_frame(self, frame: "MotionCaptureFrame"):
         # Prefixes which we classify as non-UAV.

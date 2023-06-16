@@ -263,11 +263,10 @@ class aimotionlab(Extension):
             logger: Python logger object that the extension may use. Also
                 available as ``self.log``.
         """
-
+        assert self.app is not None
         self._memory_partitions = configuration.get("memory_partitions")
         port = configuration.get("port")
         channel = configuration.get("channel")
-        assert self.app is not None
         signals = self.app.import_api("signals")
         broadcast = self.app.import_api("crazyflie").broadcast
         self.log.info("The new extension is now running.")

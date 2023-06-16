@@ -8,7 +8,7 @@ from pathlib import Path
 from struct import Struct
 from trio import open_memory_channel, open_nursery
 from trio.abc import ReceiveChannel, SendChannel
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Callable
 
 from flockwave.connections.factory import create_connection
 from flockwave.server.ext.base import UAVExtension
@@ -133,6 +133,7 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
 
         # We need a nursery that will be the parent of all tasks that handle
         # Crazyradio connections
+        self._broadcasters: List[Callable] = []
         async with open_nursery() as nursery:
             with ExitStack() as stack:
                 # Let the create_connection connection factory know about the
@@ -153,7 +154,7 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
                     # Create a function that enqueues a packet for broadcasting
                     # over the given connection
                     broadcaster = partial(nursery.start_soon, connection.broadcast)
-                    self._broadcaster = broadcaster
+                    self._broadcasters.append(broadcaster)
 
                     # Create a dedicated LED manager for the connection
                     led_manager = CrazyflieLEDLightConfigurationManager(broadcaster)
@@ -267,11 +268,12 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
 
 ############################################################################
     def broadcast(self, port, channel, packet) -> None:
-        self._broadcaster(port, channel, packet)
+        for broadcaster in self._broadcasters:
+            broadcaster(port, channel, packet)
 
     def exports(self):
         return {
-            "broadcast" : self.broadcast,
+            "broadcast": self.broadcast,
         }
 #############################################################################
 
