@@ -9,6 +9,7 @@ from aiocflib.crazyflie.high_level_commander import TrajectoryType
 from contextlib import ExitStack
 from functools import partial
 from flockwave.server.ext.motion_capture import MotionCaptureFrame
+from aiocflib.crazyflie import Crazyflie
 from trio import sleep_forever
 from .handler import AiMotionMocapFrameHandler
 from typing import Dict, Callable, Union, Tuple, Any, List
@@ -265,6 +266,13 @@ class aimotionlab(Extension):
         self.drone_handlers = []
         self.configuration = None
 
+    def _crazyflies(self):
+        uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
+        uavs: List[CrazyflieUAV] = []
+        for uav_id in uav_ids:
+            uavs.append(self.app.object_registry.find_by_id(uav_id))
+        return [uav._get_crazyflie() for uav in uavs]
+
     async def run(self, app: "SkybrushServer", configuration, logger):
         """This function is called when the extension was loaded.
 
@@ -284,7 +292,7 @@ class aimotionlab(Extension):
         assert self.app is not None
         self.configuration = configuration
         TCP_PORT = configuration.get("TCP_Port", 6000)
-        port = configuration.get("cf_port")
+        port = configuration.get("cf_port", 1)
         channel = configuration.get("channel")
         signals = self.app.import_api("signals")
         broadcast = self.app.import_api("crazyflie").broadcast
@@ -294,19 +302,18 @@ class aimotionlab(Extension):
             # create a dedicated mocap frame handler
             frame_handler = AiMotionMocapFrameHandler(broadcast, port, channel)
             # subscribe to the motion capture frame signal
-            stack.enter_context(
-                signals.use(
-                    {
-                        "motion_capture:frame": partial(
-                            self._on_motion_capture_frame_received,
-                            handler=frame_handler,
-                        )
-                    }
-                )
-            )
-            # await sleep_forever() # We need *something* here that prevents exiting the context where we are subscribed
-            # to the signal. If we don't have the serve_tcp, then we need a sleep forever.
             async with trio.open_nursery() as nursery:
+                stack.enter_context(
+                    signals.use(
+                        {
+                            "motion_capture:frame": partial(
+                                self._on_motion_capture_frame_received,
+                                handler=frame_handler,
+                                nursery=nursery
+                            )
+                        }
+                    )
+                )
                 await trio.serve_tcp(self.establish_drone_handler, TCP_PORT, handler_nursery=nursery)
 
     def _on_motion_capture_frame_received(
@@ -315,8 +322,11 @@ class aimotionlab(Extension):
             *,
             frame: "MotionCaptureFrame",
             handler: AiMotionMocapFrameHandler,
+            nursery: trio.Nursery
     ) -> None:
-        handler.notify_frame(frame)
+        crazyflies: List[Crazyflie] = self._crazyflies()
+        nursery.start_soon(handler.notify_frame, frame, crazyflies)
+
 
     async def establish_drone_handler(self, drone_stream: trio.SocketStream):
         # when a client is trying to connect (i.e. a script wants permission to give commands to a drone),
