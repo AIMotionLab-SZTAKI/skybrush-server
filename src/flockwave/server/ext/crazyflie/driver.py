@@ -1375,7 +1375,7 @@ class CrazyflieUAV(UAVBase):
         addr = await write_with_checksum(
             trajectory_memory, 0, data, only_if_changed=True
         )
-
+        print(f"length of data+checksum: {addr + len(data)}")
         # Define the geofence first (for safety reasons)
         if supports_fence:
             assert self.fence is not None

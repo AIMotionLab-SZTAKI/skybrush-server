@@ -117,7 +117,6 @@ class DroneHandler:
         except Exception as exc:
             self.log.warning(f"drone{self.uav.id}: Couldn't take off because of this exception: {exc!r}. ")
 
-
     async def land(self, arg: bytes):
         if self.uav._airborne:
             await self.uav.land()
@@ -271,7 +270,10 @@ class aimotionlab(Extension):
         uavs: List[CrazyflieUAV] = []
         for uav_id in uav_ids:
             uavs.append(self.app.object_registry.find_by_id(uav_id))
-        return [uav._get_crazyflie() for uav in uavs]
+        try:
+            return [uav._get_crazyflie() for uav in uavs]
+        except RuntimeError:
+            self.log.warning(f"Connection lost to crazyflie.")
 
     async def run(self, app: "SkybrushServer", configuration, logger):
         """This function is called when the extension was loaded.
