@@ -10,6 +10,10 @@ from typing import Sequence, Tuple
 from flockwave.server.show.formats import SegmentEncoder
 from flockwave.server.show.trajectory import TrajectorySpecification
 
+from scipy.interpolate import BPoly
+from scipy.interpolate import PPoly
+import numpy as np
+
 from .math import get_poly_degree, to_bernstein_form
 
 
@@ -197,19 +201,48 @@ def encode_trajectory(
 
 def to_poly4d_sequence(trajectory: TrajectorySpecification) -> Sequence[Poly4D]:
     result = []
-
+    last_time = trajectory.takeoff_time
     for segment in trajectory.iter_segments(max_length=65):
         if segment.has_control_points:
-            raise ValueError("control points are not implemented yet")
+            x = [point[0] for point in segment.points]
+            y = [point[1] for point in segment.points]
+            z = [point[2] for point in segment.points]
+            x_BPoly = BPoly(np.array(x).reshape(len(segment.points), 1), np.array([0, segment.duration]))
+            y_BPoly = BPoly(np.array(y).reshape(len(segment.points), 1), np.array([0, segment.duration]))
+            z_BPoly = BPoly(np.array(z).reshape(len(segment.points), 1), np.array([0, segment.duration]))
 
-        start, end = segment.start, segment.end
-        dx, dy, dz = end[0] - start[0], end[1] - start[1], end[2] - start[2]
-        dt = segment.duration
+            x_PPoly = PPoly.from_bernstein_basis(x_BPoly)
+            y_PPoly = PPoly.from_bernstein_basis(y_BPoly)
+            z_PPoly = PPoly.from_bernstein_basis(z_BPoly)
 
-        xs = (start[0], dx / dt, 0, 0, 0, 0, 0, 0)
-        ys = (start[1], dy / dt, 0, 0, 0, 0, 0, 0)
-        zs = (start[2], dz / dt, 0, 0, 0, 0, 0, 0)
+            dt = segment.duration
+            xs = list(np.flip(x_PPoly.c.reshape(len(segment.points), )))
+            if len(xs) < 8:
+                xs = xs + [0]*(8-len(xs))
+            xs = tuple(xs)
+            ys = list(np.flip(y_PPoly.c.reshape(len(segment.points), )))
+            if len(ys) < 8:
+                ys = ys + [0]*(8-len(ys))
+            ys = tuple(ys)
+            zs = list(np.flip(z_PPoly.c.reshape(len(segment.points), )))
+            if len(zs) < 8:
+                zs = zs + [0]*(8-len(zs))
+            zs = tuple(zs)
+        else:
+            start, end = segment.start, segment.end
+            dx, dy, dz = end[0] - start[0], end[1] - start[1], end[2] - start[2]
+            dt = segment.duration
 
+            xs = (start[0], dx / dt, 0, 0, 0, 0, 0, 0)
+            ys = (start[1], dy / dt, 0, 0, 0, 0, 0, 0)
+            zs = (start[2], dz / dt, 0, 0, 0, 0, 0, 0)
+
+        # print(f"segment points: {segment.points} \n"
+        #       f"xs: {xs} \n"
+        #       f"ys: {ys} \n"
+        #       f"zs: {zs} \n"
+        #       f"duration: {dt} \n"
+        #       f"-------------------------------------------------------------------------------")
         result.append(Poly4D(duration=dt, xs=xs, ys=ys, zs=zs))
 
     return result

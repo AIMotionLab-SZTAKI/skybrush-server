@@ -1209,10 +1209,9 @@ class CrazyflieUAV(UAVBase):
         session.configure(graceful_cleanup=True)
 
         # session.create_block(
-        #     "stateEstimate.qx",
-        #     "stateEstimate.qy",
-        #     "stateEstimate.qz",
-        #     "stateEstimate.qw",
+        #     "ctrltarget.x",
+        #     "ctrltarget.y",
+        #     "ctrltarget.z",
         #     period=0.2,
         #     handler=self._print_log,
         # )
@@ -1371,20 +1370,55 @@ class CrazyflieUAV(UAVBase):
         await self.set_parameter("show.landingHeight", trajectory.landing_height)
 
         # Encode the trajectory and write it to the Crazyflie memory
-        data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.COMPRESSED)
-        addr = await write_with_checksum(
-            trajectory_memory, 0, data, only_if_changed=True
-        )
-        print(f"length of data+checksum: {addr + len(data)}")
-        # Define the geofence first (for safety reasons)
-        if supports_fence:
-            assert self.fence is not None
-            await fence_config.apply(self.fence, trajectory)
+        traj_type = trajectory._data.get("type", "COMPRESSED")
+        print(f"trajectory tpe: {traj_type}")
+        if traj_type == "POLY4D":
+            data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.POLY4D)
+            addr = await write_with_checksum(
+                trajectory_memory, 0, data, only_if_changed=True
+            )
+            print(f"length of data+checksum: {addr + len(data)}, {len(trajectory._data.get('points'))} segments")
+            # Define the geofence first (for safety reasons)
+            if supports_fence:
+                assert self.fence is not None
+                await fence_config.apply(self.fence, trajectory)
+            # Now we can define the entire trajectory as well
+            await cf.high_level_commander.define_trajectory(
+                0, addr=addr, num_pieces=len(trajectory._data.get("points")), type=TrajectoryType.POLY4D
+            )
+        else:
+            data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.COMPRESSED)
+            """This block is for saving a txt file to copy to test_pptraj.c:
+            
+            breakpoints = [traj.t for traj in trajectory.iter_segments()]
+            # Round to 4 decimals (gets compressed anyway)
+            breakpoints = [round(value, 4) for value in breakpoints]
+            # Convert to string
+            breakpoints = ', '.join(map(str, breakpoints))
+            # Convert bytes to a list of hex strings
+            points = [f'0x{byte:02X}' for byte in data]
+            for i in range(7, len(points), 8):
+                points[i] = '\n' + points[i]
+            # Create a string with comma-separated hex strings
+            points = ', '.join(points)
+            with open('traj.txt', 'w') as file:
+                file.write(points)
+                file.write('\n'')
+                file.write(breakpoints)
+            """
+            addr = await write_with_checksum(
+                trajectory_memory, 0, data, only_if_changed=True
+            )
+            print(f"length of data+checksum: {addr + len(data)}")
+            # Define the geofence first (for safety reasons)
+            if supports_fence:
+                assert self.fence is not None
+                await fence_config.apply(self.fence, trajectory)
+            # Now we can define the entire trajectory as well
+            await cf.high_level_commander.define_trajectory(
+                0, addr=addr, type=TrajectoryType.COMPRESSED
+            )
 
-        # Now we can define the entire trajectory as well
-        await cf.high_level_commander.define_trajectory(
-            0, addr=addr, type=TrajectoryType.COMPRESSED
-        )
 
 
 class CrazyflieHandlerTask:
