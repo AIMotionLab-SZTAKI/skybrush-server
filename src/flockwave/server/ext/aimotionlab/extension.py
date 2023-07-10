@@ -95,7 +95,8 @@ class DroneHandler:
                         self.log.warning(f"drone{self.uav.id}: Couldn't write because of this exception: {exc!r}. "
                                          f"Trying again in 0.05 second.")
                         await sleep(0.05)
-            self.log.warning(f"drone{self.uav.id}: Moved on after 2.5 second of trying to write trajectory.")
+            self.log.warning(f"drone{self.uav.id}: Moved on after 2.5 second of trying to write trajectory. Landing.")
+
         return False, None
 
     async def takeoff(self, arg: bytes):
@@ -273,7 +274,8 @@ class aimotionlab(Extension):
         try:
             return [uav._get_crazyflie() for uav in uavs]
         except RuntimeError:
-            self.log.warning(f"Connection lost to crazyflie.")
+            pass
+            # self.log.warning(f"Connection lost to crazyflie.")
 
     async def run(self, app: "SkybrushServer", configuration, logger):
         """This function is called when the extension was loaded.

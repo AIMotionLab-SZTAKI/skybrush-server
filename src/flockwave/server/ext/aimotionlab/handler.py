@@ -21,7 +21,7 @@ class AiMotionMocapFrameHandler:
 
     async def notify_frame(self, frame: "MotionCaptureFrame", crazyflies: List[Crazyflie]):
         # Prefixes which we classify as non-UAV.
-        valid_prefixes = ['bu', 'hook', 'test']
+        valid_prefixes = ['hook', 'test']
         poses: List[Tuple[int, Tuple[float, float, float], QuaternionXYZW]] = []
         if self._compress:
             for item in frame.items:
@@ -57,10 +57,11 @@ class AiMotionMocapFrameHandler:
                         if item.attitude is not None and item.position is not None:
                             qw, qx, qy, qz = item.attitude
                             x, y, z = item.position
-                            for crazyflie in crazyflies:
-                                packet = crazyflie.localization._external_pose_struct.pack(
-                                    GenericLocalizationCommand.EXT_POSE, x, y, z, qx, qy, qz, qw)
-                                await crazyflie.send_packet(port=self._port, channel=self._channel, data=packet)
-                                # print(f"sending to {crazyflie.uri}")
+                            if crazyflies is not None:
+                                for crazyflie in crazyflies:
+                                    packet = crazyflie.localization._external_pose_struct.pack(
+                                        GenericLocalizationCommand.EXT_POSE, x, y, z, qx, qy, qz, qw)
+                                    await crazyflie.send_packet(port=self._port, channel=self._channel, data=packet)
+                                    # print(f"sending to {crazyflie.uri}")
 
 
