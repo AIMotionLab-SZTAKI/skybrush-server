@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import aclosing
 from typing import (
     Any,
     AsyncIterable,
@@ -12,6 +11,7 @@ from typing import (
 )
 
 from flockwave.channels.message import MessageChannel
+from flockwave.concurrency import aclosing
 from flockwave.connections import Connection
 from flockwave.encoders.json import create_json_encoder
 from flockwave.parsers.json import create_json_parser
