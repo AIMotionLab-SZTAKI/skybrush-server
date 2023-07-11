@@ -62,6 +62,6 @@ class AiMotionMocapFrameHandler:
                                     packet = crazyflie.localization._external_pose_struct.pack(
                                         GenericLocalizationCommand.EXT_POSE, x, y, z, qx, qy, qz, qw)
                                     await crazyflie.send_packet(port=self._port, channel=self._channel, data=packet)
-                                    # print(f"sending to {crazyflie.uri}")
+                                    # print(f"sending {x}, {y}, {z} to {crazyflie.uri}")
 
 
