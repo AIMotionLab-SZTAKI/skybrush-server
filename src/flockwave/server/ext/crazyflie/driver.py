@@ -1227,9 +1227,9 @@ class CrazyflieUAV(UAVBase):
 
         return session
         session.create_block(
-            "Lqr1.real_mass",
+            "ctrlGeom.erz",
             # "Lqr1.dalpha",
-            period=0.2,
+            period=0.5,
             handler=self._print_log,
         )
         return session

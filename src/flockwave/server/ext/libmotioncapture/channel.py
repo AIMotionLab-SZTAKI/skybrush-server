@@ -11,6 +11,7 @@ from typing import (
 )
 
 from flockwave.channels.message import MessageChannel
+# from contextlib import aclosing
 from flockwave.concurrency import aclosing
 from flockwave.connections import Connection
 from flockwave.encoders.json import create_json_encoder

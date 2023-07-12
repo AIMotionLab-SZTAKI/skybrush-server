@@ -1,48 +1,70 @@
-# Skybrush Server
+libmotioncapture extension and SZTAKI-aimotionlab extension for Skybrush Server
+==============================================================================
 
-Skybrush Server is the server component behind the Skybrush ecosystem; it handles
-communication channels to drones and provides an abstraction layer on top of them
-so frontend apps (like Skybrush Live) do not need to know what type of drones
-they are communicating with.
+This repository contains an experimental version of the Skybrush Server
+that adds support for multiple mocap systems via an abstraction layer offered
+by `libmotioncapture` for indoor drone tracking, as well as SZTAKI's Aimotionlab extension.
+This readme contains info about installation and setup. For information about
+how the extension works, visit the Wiki.
 
-The server also provides additional facilities like clocks, RTK correction
-sources, weather providers and so on. It is extensible via extension modules
-that can be loaded automatically at startup or dynamically while the server is
-running. In fact, most of the functionality in the server is implemented in the
-form of extensions; see the `flockwave.server.ext` module in the source code
-for the list of built-in extensions. You may also develop your own extensions to
-extend the functionality of the server.
+Before we begin
+------------
 
-## Installation
+1. You will need to install the driver for the Crazyradio Dongle. Instructions 
+   on it can be found here: https://www.bitcraze.io/products/crazyradio-pa/
 
-1. Install `poetry`. `poetry` will manage a separate virtual environment for this
-   project to keep things nicely separated. You won't pollute the system Python
-   with the dependencies of the Skybrush server and everyone will be happier.
-   See https://python-poetry.org/ for installation instructions.
+2. You will need Git and Poetry. You probably already have Git downloaded, but you
+   may need to install Poetry. If you are using Windows, you're going to have to add the path where
+   poetry was installed to your Path environmental variable, so pay attention to where 
+   it was installed. Before continuing on, in order to make poetry install the virtual 
+   environment in your project folder (instead of deep in AppData), run this command: 
+   `poetry config virtualenvs.in-project true`.
+   
+3. You will need a drone with Skybrush compatible firmware. Instructions on achieving
+   this can be found here: https://github.com/AIMotionLab-SZTAKI/crazyflie-firmware.
+   Do not forget to designate a marker set for the drone in Motive!
+   
+4. Download skybrush live (AppImage for Linux, executable for Windows):
+   https://skybrush.io/modules/live/
 
-2. Check out the source code of the server.
 
-3. Run `poetry install` to install all the dependencies and the server itself
-   in a separate virtualenv. The virtualenv will be created in a folder named
-   `.venv` in the project folder.
+Installation
+------------
 
-4. Run `poetry run skybrushd` to start the server.
+1. Check out this repository using git.
+2. For the Skybrush server to work with the optitrack system, you need the libmotioncapture package. For this, we need 
+   to tell poetry where to look for the files of the package.
+   1. On python 3.8 or 3.9: open pyproject.toml, and under `[tool.poetry.dependencies]` , look
+      for the line `motioncapture = ...`. Change it to `motioncapture = "^1.0a1"`. This will
+      install the libmotioncapture library from pypi. 
+   2. If you're using python 3.10 or newer, this won't work, because (as of the writing of this readme) the version of 
+      libmotioncapture on pypi is not compatible with the newer python versions. Instead, we need to compile our own 
+      libmotioncapture package for our version of python. Note that this is only easily achieved on Linux. 
+      Check out the libmotioncapture repository: https://github.com/IMRCLab/libmotioncapture. In the libmotioncapture 
+      directory, do `git submodule init` & `git submodule update`. You may also need to install these packages (and their dependencies):
+      `sudo apt install libboost-system-dev libboost-thread-dev libeigen3-dev ninja-build`
+      In the same directory, `python3 -m build`. This creates the necessary
+      wheel file in the libmotioncapture/dist directory. Open pyproject.toml, and under `[tool.poetry.dependencies]` 
+      look for the line `motioncapture = { file = "..."}`. Change the path here to wherever your wheel
+      for libmotioncapture can be found (for example, libmotioncapture/dist/WHEELNAME.whl).
 
-## Documentation
+3. Run `poetry install`; this will create a virtual environment and install
+   Skybrush Server with all required dependencies in it, as well as the code
+   of the extensions.
 
-- [User guide](https://doc.collmot.com/public/skybrush-live-doc/latest/)
+4. If any dependencies fail to install at first, you may check their status
+   with `poetry show`. It is possible that some *optional* dependencies may fail to install.
+   If this is the case, you can try deleting these dependencies from pyproject.toml (they are
+   marked with optional=true). 
+   
+5. Make sure you are connected to the optitrack server **via ethernet**. Wireless connection
+   will result in choppy data transfer.
 
-## License
+6. Run the server with `poetry run skybrushd -c skybrushd.jsonc`.
 
-Skybrush Server is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version.
-
-Skybrush Server is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
-more details.
-
-You should have received a copy of the GNU General Public License along with
-this program. If not, see <https://www.gnu.org/licenses/>.
+7. Start Skybrush Live. When you start Live, the server terminal should tell you that a
+   Client is connected. You should be able to see any turned on Drones under UAVs. Before
+   doing a takeoff, make sure that the position of the drone is stable. If there is an
+   issue with the motion capture system, the drone's position will diverge. If you turned
+   on the drone's tracking in motive *after* the server was launched, you need to restart
+   the server.
