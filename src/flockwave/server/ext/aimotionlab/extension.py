@@ -203,14 +203,14 @@ class DroneHandler:
         # await self.stream.send_all(b'Command received: ' + cmd)
         await self.tcp_command_dict[cmd][0](self, arg)
 
+    # TODO: write a client script that tests the new dictionary
     tcp_command_dict: Dict[
-        bytes, Tuple[Callable[[Any, bytes], None], Tuple[bool, Any], bool]] = {
-        b"takeoff": (takeoff, (True, float), False),
-        # The command takeoff takes a float argument and expects no payload
-        b"land": (land, (False, None), False),  # The command land takes no argument and expects no payload
-        b"upload": (upload, (False, None), True),  # The command upload takes no argument but expects a payload
-        b"hover": (hover, (False, None), False),  # The command hover takes no argument and expects no payload
-        b"start": (start, (True, str), False),  # The command start a string argument but expects no payload
+        bytes, Tuple[Callable[[Any, bytes], None], bool]] = {
+        b"takeoff": (takeoff, True),  # The command takeoff expects a takeoff height as its argument
+        b"land": (land, False),  # The command land takes no argument
+        b"upload": (upload, True),  # The command upload takes no argument
+        b"hover": (hover, False),  # The command hover takes no argument and expects no payload
+        b"start": (start, True),  # The command start expects the trajectory type as its argument
     }
 
     def parse(self, raw_data: bytes, ) -> Tuple[Union[bytes, None], Union[bytes, None]]:
@@ -223,12 +223,10 @@ class DroneHandler:
         command = data[1]
         if command not in self.tcp_command_dict:
             return b'WRONG_CMD', None
-        if self.tcp_command_dict[command][1][0]:  # This is a boolean signifying whether we expect an argument
+        if self.tcp_command_dict[command][1]:  # This is a boolean signifying whether we expect an argument
             argument = data[2]
         else:
             argument = None
-        if self.tcp_command_dict[command][2]:   # This is a boolean signifying that we are expecting a payload
-            pass  # not needed? verify pls
         return command, argument
 
     async def listen(self):
