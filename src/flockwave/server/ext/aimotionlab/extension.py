@@ -61,9 +61,9 @@ class DroneHandler:
         # relative (second part). If it wasn't valid, we just get None for the second part.
         traj_type_lower = arg.lower()  # Bit of an allowance to not be case sensitive
         # TODO: investigate whether the trajectory starts from the drone's current location
-        if traj_type_lower == b'relative':
+        if traj_type_lower == b'relative' or traj_type_lower == b'rel':
             return True, True
-        elif traj_type_lower == b'absolute':
+        elif traj_type_lower == b'absolute' or traj_type_lower == b'abs':
             return True, False
         else:
             return False, None
@@ -133,7 +133,7 @@ class DroneHandler:
         # await self.stream.send_all(b'Transmission of trajectory started.')
         self.log.info(f"drone{self.uav.id}: Transmission of trajectory started.")
         start_index = self.stream_data.find(b'{')
-        # If the command was 'traj', then a json file must follow. If it doesn't (we can't find the beginning b'{'),
+        # If the command was 'upload', then a json file must follow. If it doesn't (we can't find the beginning b'{'),
         # then the command or the file was corrupted.
         if start_index == -1:
             self.log.warning("Corrupted trajectory file.")
@@ -174,6 +174,7 @@ class DroneHandler:
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
             self.log.warning(f"Trajectory couldn't be written.")
+            await self.uav.land()
 
     async def start(self, arg: bytes):
         cf = self.uav._get_crazyflie()
