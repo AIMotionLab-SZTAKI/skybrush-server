@@ -21,7 +21,8 @@ import json
 
 __all__ = ("aimotionlab", )
 
-#TODO: make a restart command, and use it to handle takeoff commands when the drone is exactly in 0, 0, 0
+
+# TODO: make a restart command, and use it to handle takeoff commands when the drone is exactly in 0, 0, 0
 class DroneHandler:
     def __init__(self, uav: CrazyflieUAV, stream: trio.SocketStream, log: logging.Logger, configuration):
         self.traj = b''
@@ -149,7 +150,7 @@ class DroneHandler:
     async def upload(self, arg: bytes):
         await self.handle_transmission()
         cf = self.uav._get_crazyflie()
-        if self.hover_between: # TODO: where should this be???? definitely not here
+        if self.hover_between:  # TODO: where should this be???? definitely not here
             # initiate hover while we switch trajectories so that we don't drift too far
             await cf.high_level_commander.start_trajectory(1, time_scale=1, relative=True, reversed=False)
         try:
@@ -331,23 +332,25 @@ class aimotionlab(Extension):
         crazyflies: List[Crazyflie] = self._crazyflies()
         nursery.start_soon(handler.notify_frame, frame, crazyflies)
 
-
     async def establish_drone_handler(self, drone_stream: trio.SocketStream):
         # when a client is trying to connect (i.e. a script wants permission to give commands to a drone),
         # we must check what uavs are recognised by the server:
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
-        # take away the ones that already have a handler TODO: provide a way to relinquish command
+        # take away the ones that already have a handler
         taken_ids = [handler.uav.id for handler in self.drone_handlers]
         # and what's left is the drones up for grabs
         available_ids = [drone_id for drone_id in uav_ids if drone_id not in taken_ids]
         if len(available_ids) != 0:  # if there are free drones, tell the user
             self.log.info(f"TCP connection made. Valid drone IDs: {uav_ids}. "
                           f"Of these the following are not yet taken: {available_ids}")
-            available_ids_string = ",".join(available_ids)
-            available_ids_bytes = available_ids_string.encode("utf-8")
-            await drone_stream.send_all(available_ids_bytes)
-            requested_id = await drone_stream.receive_some()
-            requested_id = requested_id.decode("utf-8")
+            request = await drone_stream.receive_some()
+            request = request.decode('utf-8')
+            # The client will send a request for a drone handler beginning with REQ_, i.e.: REQ_06
+            if 'REQ_' in request:
+                requested_id = request.split('REQ_')[1]
+            else:
+                self.log.warning(f"Wrong request.")
+                await drone_stream.send_all(b'ACK_00')
             try:
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(requested_id)
                 handler = DroneHandler(uav, drone_stream, self.log, self.configuration)
@@ -356,7 +359,8 @@ class aimotionlab(Extension):
                               f"Currently we have handlers for the following drones: "
                               f"{[handler.uav.id for handler in self.drone_handlers]}")
                 await handler.define_hover()
-                await drone_stream.send_all(b'success')
+                acknowledgement = f"ACK_{requested_id}"
+                await drone_stream.send_all(acknowledgement.encode('utf-8'))
                 await handler.listen()
                 self.drone_handlers = [drone_handler for drone_handler in self.drone_handlers
                                        if drone_handler.uav.id != handler.uav.id]
@@ -364,9 +368,10 @@ class aimotionlab(Extension):
                               f"{[drone_handler.uav.id for drone_handler in self.drone_handlers]}")
             except KeyError:
                 self.log.warning(f"UAV by ID {requested_id} is not found in the client registry.")
+                await drone_stream.send_all(b'ACK_00')
         else:  # if there aren't any drones left, tell them that
             self.log.warning(f"All drone IDs are accounted for.")
-            await drone_stream.send_all(b'00')
+            await drone_stream.send_all(b'ACK_00')
 
 
 
