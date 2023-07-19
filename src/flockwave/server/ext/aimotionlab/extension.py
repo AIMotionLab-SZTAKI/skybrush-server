@@ -35,6 +35,7 @@ class DroneHandler:
         self.log = log
         self.hover_between = False
         self.memory_partitions = configuration.get("memory_partitions")
+        self.crashed = False
 
     async def define_hover(self):
         trajectory_data = None
@@ -108,26 +109,26 @@ class DroneHandler:
                 self.log.warning(f"Takeoff height {arg}m is out of allowed range, taking off to 0.5m instead.")
             if self.uav._airborne:
                 self.log.warning(f"Drone {self.uav.id} already airborne, takeoff command wasn't dispatched.")
-                # await self.stream.send_all(b"Drone is already airborne, takeoff command wasn't dispatched.")
+                self.crashed = True
             else:
                 await self.uav.takeoff(altitude=arg)
-                # await self.stream.send_all(b'Takeoff command dispatched to drone.')
                 self.log.info(f"Takeoff command dispatched to drone {self.uav.id}.")
                 await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         except ValueError:
             self.log.warning("Takeoff argument is not a float.")
+            self.crashed = True
         except Exception as exc:
             self.log.warning(f"drone{self.uav.id}: Couldn't take off because of this exception: {exc!r}. ")
+            self.crashed = True
 
     async def land(self, arg: bytes):
         if self.uav._airborne:
             await self.uav.land()
-            # await self.stream.send_all(b'Land command dispatched to drone.')
             self.log.info(f"Land command dispatched to drone {self.uav.id}.")
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
             self.log.warning(f"Drone {self.uav.id} is already on the ground, land command wasn't dispatched.")
-            # await self.stream.send_all(b"Drone is already on the ground, land command wasn't dispatched.")
+            self.crashed = True
 
     async def handle_transmission(self):
         # await self.stream.send_all(b'Transmission of trajectory started.')
@@ -157,6 +158,7 @@ class DroneHandler:
             trajectory_memory = await cf.mem.find(MemoryType.TRAJECTORY)
         except ValueError:
             raise RuntimeError("Trajectories are not supported on this drone") from None
+            self.crashed = True
         # print(self.traj.decode('utf-8'))
         trajectory_data = json.loads(self.traj.decode('utf-8'))
         trajectory = TrajectorySpecification(trajectory_data)
@@ -175,6 +177,7 @@ class DroneHandler:
         else:
             self.log.warning(f"Trajectory couldn't be written.")
             await self.uav.land()
+            self.crashed = True
 
     async def start(self, arg: bytes):
         cf = self.uav._get_crazyflie()
@@ -189,6 +192,7 @@ class DroneHandler:
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
             self.log.warning(f"Drone {self.uav.id} is not airborne.")
+            self.crashed = True
 
     async def hover(self, arg: bytes):
         if self.uav._airborne:
@@ -198,13 +202,13 @@ class DroneHandler:
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
             self.log.warning(f"Drone {self.uav.id} is on the ground, if you want to do a takeoff, do so from Live")
+            self.crashed = True
 
     async def command(self, cmd: bytes, arg: bytes):
         self.log.info(f"Command received for drone {self.uav.id}: {cmd.decode('utf-8')}")
         # await self.stream.send_all(b'Command received: ' + cmd)
         await self.tcp_command_dict[cmd][0](self, arg)
 
-    # TODO: write a client script that tests the new dictionary
     tcp_command_dict: Dict[
         bytes, Tuple[Callable[[Any, bytes], None], bool]] = {
         b"takeoff": (takeoff, True),  # The command takeoff expects a takeoff height as its argument
@@ -231,7 +235,7 @@ class DroneHandler:
         return command, argument
 
     async def listen(self):
-        while True:
+        while not self.crashed:
             if not self.transmission_active:
                 try:
                     self.stream_data: bytes = await self.stream.receive_some()
@@ -240,15 +244,12 @@ class DroneHandler:
                     cmd, arg = self.parse(self.stream_data)
                     if cmd == b'NO_CMDSTART':
                         self.log.info(f"Command for drone {self.uav.id} is missing standard CMDSTART")
-                        # await self.stream.send_all(b'Command is missing standard CMDSTART')
                         break
                     elif cmd == b'WRONG_CMD':
                         self.log.info(f"Command for drone {self.uav.id} is not found in server side dictionary")
-                        # await self.stream.send_all(b'Command is not found in server side dictionary')
                         break
                     elif cmd is None:
                         self.log.warning(f"None-type command for drone {self.uav.id}")
-                        # await self.stream.send_all(b'None-type command')
                         break
                     else:
                         await self.command(cmd, arg)
