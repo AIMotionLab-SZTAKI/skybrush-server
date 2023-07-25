@@ -1402,9 +1402,10 @@ class CrazyflieUAV(UAVBase):
             points = ', '.join(points)
             with open('traj.txt', 'w') as file:
                 file.write(points)
-                file.write('\n'')
+                file.write('\n')
                 file.write(breakpoints)
-            """
+            print(f"saved traj.txt for debugging!")"""
+
             addr = await write_with_checksum(
                 trajectory_memory, 0, data, only_if_changed=True
             )

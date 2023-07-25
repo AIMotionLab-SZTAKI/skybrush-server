@@ -565,15 +565,25 @@ class SegmentEncoder:
         y_format, ys = self._encode_coordinate_series(ys)
         z_format, zs = self._encode_coordinate_series(zs)
 
-        header = self._header_struct.pack(
-            x_format | (y_format << 2) | (z_format << 4), duration
-        )
-
-        parts = [header]
-        parts.extend(xs)
-        parts.extend(ys)
-        parts.extend(zs)
-
+        if segment.yaws is not None:
+            yaws = [self._scale_yaw(yaw) for yaw in segment.yaws]
+            yaw_format, yaws = self._encode_coordinate_series(yaws)
+            header = self._header_struct.pack(
+                x_format | (y_format << 2) | (z_format << 4) | (yaw_format << 6), duration
+            )
+            parts = [header]
+            parts.extend(xs)
+            parts.extend(ys)
+            parts.extend(zs)
+            parts.extend(yaws)
+        else:
+            header = self._header_struct.pack(
+                x_format | (y_format << 2) | (z_format << 4), duration
+            )
+            parts = [header]
+            parts.extend(xs)
+            parts.extend(ys)
+            parts.extend(zs)
         return b"".join(parts)
 
     def iter_encode_multiple_segments(
@@ -598,7 +608,8 @@ class SegmentEncoder:
         for segment in segments:
             if first:
                 # Encode the start point of the trajectory
-                yield self.encode_point(segment.start)
+                first_yaw = segment.yaws[0] if segment.yaws is not None else 0
+                yield self.encode_point(segment.start, yaw=first_yaw)
                 first = False
 
             # Encode the segment without its start point
@@ -642,8 +653,9 @@ class SegmentEncoder:
         )
 
     def _scale_yaw(self, yaw: float) -> int:
-        yaw = round((yaw % 360) * 10)
-        return yaw - 3600 if yaw >= 3600 else yaw
+        # yaw = round((yaw % 360) * 10)
+        # return yaw - 3600 if yaw >= 3600 else yaw
+        return round(yaw * 10)  # note that the firmware correctly handles angles outsite [0, 360] without our help
 
 
 class RTHPlanEncoder:

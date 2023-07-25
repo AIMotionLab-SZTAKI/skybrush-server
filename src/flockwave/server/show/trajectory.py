@@ -4,7 +4,7 @@ Skybrush-related trajectories, until we find a better place for them.
 
 from dataclasses import dataclass
 from math import ceil, inf
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple, Optional
 
 from .utils import BoundingBoxCalculator, Point
 
@@ -25,6 +25,11 @@ class TrajectorySegment:
 
     points: List[Point]
     """The control points of the segment, including the start and end point."""
+
+    yaws: Optional[List[float]] = None
+    """New addition. Instead of adding the yaws to the points, we treat them separately, so that operations that 
+    involve the points don't need to be reworked to consider 4 dimensions. Instead, we just add new operations to 
+    handle the yaw trajectory where needed."""
 
     @property
     def has_control_points(self) -> bool:
@@ -145,6 +150,12 @@ class TrajectorySpecification:
             data: the raw JSON trajectory dictionary in the show specification
         """
         self._data = data
+        if len(self._data.get("points")[0][1]) == 4:
+            print(f"Received a trajectory with heading data!")
+            self.has_heading = True
+        else:
+            print(f"Received a trajectory without heading data!")
+            self.has_heading = False
 
         version = self._data.get("version")
         if version is None:
@@ -242,6 +253,9 @@ class TrajectorySpecification:
 
         bbox = BoundingBoxCalculator(dim=3)
         for _, point, control_points in points:
+            if self.has_heading:
+                point = point[:-1]
+                control_points = [control_point[:-1] for control_point in control_points]
             bbox.add(point)
             for control_point in control_points:
                 bbox.add(control_point)
@@ -276,7 +290,13 @@ class TrajectorySpecification:
                     raise ValueError(f"time should not stand still at t = {t}")
                 else:
                     points = [start, *control, point]  # type: ignore
-                    segment = TrajectorySegment(t=prev_t, duration=dt, points=points)
+                    if self.has_heading:
+                        # before this, 'points' contained data about the headings too: separate them!
+                        yaws = [point[-1] for point in points]
+                        points = [point[:-1] for point in points]
+                        segment = TrajectorySegment(t=prev_t, duration=dt, points=points, yaws=yaws)
+                    else:
+                        segment = TrajectorySegment(t=prev_t, duration=dt, points=points)
                     if dt > max_length:
                         yield from segment.split_to_max_duration(max_length)
                     else:
