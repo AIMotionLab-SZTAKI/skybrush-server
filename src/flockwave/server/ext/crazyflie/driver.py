@@ -1031,7 +1031,7 @@ class CrazyflieUAV(UAVBase):
         else:
             raise NotSupportedError
 
-    async def upload_show(self, show, *, remember: bool = True) -> None:
+    async def upload_show(self, show: Dict, *, remember: bool = True) -> None:
         home = get_home_position_from_show_specification(show)
         trajectory = get_trajectory_from_show_specification(show)
         group_index = get_group_index_from_show_specification(show)
@@ -1053,6 +1053,11 @@ class CrazyflieUAV(UAVBase):
             else:
                 raise
 
+        try:
+            start_yaw = show.get("startYaw", 0)
+            await self.set_parameter("preflight.startYaw", start_yaw)
+        except Exception as exc:
+            raise RuntimeError("Couldn't set start yaw.")
         try:
             await self._upload_trajectory_and_fence(
                 trajectory, home, fence_config=self.driver.fence_config
