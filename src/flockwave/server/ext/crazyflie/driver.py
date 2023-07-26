@@ -1370,13 +1370,13 @@ class CrazyflieUAV(UAVBase):
 
         # Encode the trajectory and write it to the Crazyflie memory
         traj_type = trajectory._data.get("type", "COMPRESSED")
-        print(f"trajectory tpe: {traj_type}")
+        print(f"trajectory type: {traj_type}")
         if traj_type == "POLY4D":
             data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.POLY4D)
+            print(f"length of data without checksum: {len(data)}, {len(trajectory._data.get('points'))} segments")
             addr = await write_with_checksum(
                 trajectory_memory, 0, data, only_if_changed=True
             )
-            print(f"length of data+checksum: {addr + len(data)}, {len(trajectory._data.get('points'))} segments")
             # Define the geofence first (for safety reasons)
             if supports_fence:
                 assert self.fence is not None
@@ -1405,11 +1405,10 @@ class CrazyflieUAV(UAVBase):
                 file.write('\n')
                 file.write(breakpoints)
             print(f"saved traj.txt for debugging!")"""
-
+            print(f"length of data without checksum: {len(data)}")
             addr = await write_with_checksum(
                 trajectory_memory, 0, data, only_if_changed=True
             )
-            print(f"length of data+checksum: {addr + len(data)}")
             # Define the geofence first (for safety reasons)
             if supports_fence:
                 assert self.fence is not None
@@ -1418,7 +1417,6 @@ class CrazyflieUAV(UAVBase):
             await cf.high_level_commander.define_trajectory(
                 0, addr=addr, type=TrajectoryType.COMPRESSED
             )
-
 
 
 class CrazyflieHandlerTask:

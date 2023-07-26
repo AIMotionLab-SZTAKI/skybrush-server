@@ -203,28 +203,35 @@ def to_poly4d_sequence(trajectory: TrajectorySpecification) -> Sequence[Poly4D]:
             x = [point[0] for point in segment.points]
             y = [point[1] for point in segment.points]
             z = [point[2] for point in segment.points]
+            yaw = segment.yaws if segment.yaws is not None else [0] * len(segment.points)
+            yaw = list(np.deg2rad(yaw))
             dt = segment.duration
             xs = [0] * 8
             ys = [0] * 8
             zs = [0] * 8
+            yaws = [0] * 8
             n = len(segment.points) - 1
             fac = np.math.factorial
             for j in range(n+1):
                 coeff_x = 0
                 coeff_y = 0
                 coeff_z = 0
+                coeff_yaw = 0
                 sign = -1 if (j % 2) else 1
                 for i in range(j + 1):
                     coeff_x += sign * x[i] / fac(i) / fac(j - i)
                     coeff_y += sign * y[i] / fac(i) / fac(j - i)
                     coeff_z += sign * z[i] / fac(i) / fac(j - i)
+                    coeff_yaw += sign * yaw[i] / fac(i) / fac(j - i)
                     sign *= -1
                 xs[j] = coeff_x * fac(n) / fac(n - j)
                 ys[j] = coeff_y * fac(n) / fac(n - j)
                 zs[j] = coeff_z * fac(n) / fac(n - j)
+                yaws[j] = coeff_yaw * fac(n) / fac(n - j)
             xs = [coeff * (1 / dt) ** index for index, coeff in enumerate(xs)]
             ys = [coeff * (1 / dt) ** index for index, coeff in enumerate(ys)]
             zs = [coeff * (1 / dt) ** index for index, coeff in enumerate(zs)]
+            yaws = [coeff * (1 / dt) ** index for index, coeff in enumerate(yaws)]
         else:
             start, end = segment.start, segment.end
             dx, dy, dz = end[0] - start[0], end[1] - start[1], end[2] - start[2]
@@ -232,11 +239,17 @@ def to_poly4d_sequence(trajectory: TrajectorySpecification) -> Sequence[Poly4D]:
             xs = (start[0], dx / dt, 0, 0, 0, 0, 0, 0)
             ys = (start[1], dy / dt, 0, 0, 0, 0, 0, 0)
             zs = (start[2], dz / dt, 0, 0, 0, 0, 0, 0)
+            if segment.yaws is not None:
+                yaws = (segment.yaws[0], (segment.yaws[-1] - segment.yaws[0]) / dt, 0, 0, 0, 0, 0, 0)
+                yaws = list(np.deg2rad(yaws))
+            else:
+                yaws = (0, 0, 0, 0, 0, 0, 0, 0)
         # print(f"segment points: {segment.points} \n"
         #       f"xs: {xs} \n"
         #       f"ys: {ys} \n"
         #       f"zs: {zs} \n"
+        #       f"yaws: {yaws} \n"
         #       f"duration: {dt} \n"
         #       f"-------------------------------------------------------------------------------")
-        result.append(Poly4D(duration=dt, xs=xs, ys=ys, zs=zs))
+        result.append(Poly4D(duration=dt, xs=xs, ys=ys, zs=zs, yaws=yaws))
     return result
