@@ -39,7 +39,7 @@
     "libmotioncapture": {
       "connections": [
         {
-          "hostname": "192.168.1.141",
+          "hostname": "192.168.1.142",
           "type": "optitrack"
         }
       ],

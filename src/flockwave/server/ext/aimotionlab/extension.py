@@ -1,6 +1,6 @@
 import logging
 import trio
-from trio import sleep
+from trio import sleep, sleep_until
 from flockwave.server.app import SkybrushServer
 from flockwave.server.ext.base import Extension
 from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
@@ -12,12 +12,13 @@ from flockwave.server.ext.motion_capture import MotionCaptureFrame
 from aiocflib.crazyflie import Crazyflie
 from trio import sleep_forever
 from .handler import AiMotionMocapFrameHandler
-from typing import Dict, Callable, Union, Tuple, Any, List
+from typing import Dict, Callable, Union, Tuple, Any, List, Optional
 from flockwave.server.show.trajectory import TrajectorySpecification
 from aiocflib.crazyflie.mem import write_with_checksum
 from aiocflib.crtp.crtpstack import MemoryType
 from aiocflib.utils.checksum import crc32
 import json
+from copy import deepcopy
 
 __all__ = ("aimotionlab", )
 
@@ -261,12 +262,13 @@ class DroneHandler:
 class aimotionlab(Extension):
     """Extension that broadcasts the pose of non-UAV objects to the Crazyflie drones."""
     drone_handlers: List[DroneHandler]
+    show_clock: [Optional]
 
     def __init__(self):
         super().__init__()
         self.drone_handlers = []
         self.configuration = None
-
+        self.controller_switches: Dict[str, List[List[Union[float, int]]] ] = {}
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
         uavs: List[CrazyflieUAV] = []
@@ -302,6 +304,8 @@ class aimotionlab(Extension):
         signals = self.app.import_api("signals")
         broadcast = self.app.import_api("crazyflie").broadcast
         self.log.info("The new extension is now running.")
+        self.show_clock = self.app.import_api("show").get_clock  # maybe show clock instead of sleep_until?
+
         await sleep(1.0)
         with ExitStack() as stack:
             # create a dedicated mocap frame handler
@@ -315,11 +319,54 @@ class aimotionlab(Extension):
                                 self._on_motion_capture_frame_received,
                                 handler=frame_handler,
                                 nursery=nursery
-                            )
+                            ),
+                            "show:upload": self._on_show_upload,
+                            "show:start": partial(
+                                self._on_show_start,
+                                nursery=nursery),
                         }
                     )
                 )
                 await trio.serve_tcp(self.establish_drone_handler, TCP_PORT, handler_nursery=nursery)
+
+    def _on_show_upload(self, sender, controllers):
+        if controllers[1] is None:
+            if controllers[0] in self.controller_switches:
+                del self.controller_switches[controllers[0]]
+                self.log.warning(f"Previously saved controller switch deleted for drone {controllers[0]}")
+            else:
+                pass
+        else:
+            self.log.warning(f"Controller switches detected for drone {controllers[0]}")
+            self.controller_switches[controllers[0]] = controllers[1]
+
+    def _on_show_start(self, sender, *, nursery):
+        if len(self.controller_switches) > 0:
+            start_time = trio.current_time()
+
+            # save this so we can clear self.controller_switches and avoid 'leftover' switches from previous uploads.
+            # In other words, if we want to include controller switches, we must do a fresh upload before a show start
+            controller_switches = deepcopy(self.controller_switches)
+            self.controller_switches = {}
+            self.log.warning(f"Controller switches cleared!")
+            for uav_id in controller_switches.keys():
+                uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
+                controller_switches = [[start_time + controller_switch[0], controller_switch[1]] for controller_switch in controller_switches[uav_id]]
+                nursery.start_soon(self._perform_controller_switches, uav, controller_switches)
+
+    async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
+        if uav.is_in_drone_show_mode:
+            for switch in switches:
+                switch_time = switch[0]
+                switch_controller = switch[1]
+                await sleep_until(switch_time)
+                if uav.is_running_show and uav._airborne:
+                    await uav.set_parameter("stabilizer.controller", switch_controller)
+        else:
+            return
+        # await sleep(5)
+        # if self.show_clock is not None:
+        #     print(self.show_clock().seconds)
 
     def _on_motion_capture_frame_received(
             self,

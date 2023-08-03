@@ -72,6 +72,8 @@ from .fence import Fence, FenceConfiguration
 from .trajectory import encode_trajectory, TrajectoryEncoding
 from .types import ControllerType
 
+import pickle
+
 if TYPE_CHECKING:
     from flockwave.server.app import SkybrushServer
 
@@ -414,6 +416,12 @@ class CrazyflieDriver(UAVDriver["CrazyflieUAV"]):
             await uav.set_parameter(
                 "stabilizer.controller", int(self.preferred_controller)
             )
+
+        controllers = show.get("controllers", None)
+        assert self.app is not None
+        controllers = (uav.id, controllers)
+        upload_signal = self.app.import_api("signals").get("show:upload")
+        upload_signal.send(self, controllers=controllers)
 
     handle_command_color = create_color_command_handler()
     handle_command_motoroff = handle_command_stop
