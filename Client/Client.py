@@ -47,6 +47,7 @@ demo_maneuvers = [(1, takeoff(0.3)),
                   (5, land())]
 
 
+
 async def establish_connection_with_handler(drone_id: str):
     drone_stream: trio.SocketStream = await trio.open_tcp_stream("127.0.0.1", PORT)
     await sleep(0.01)
@@ -61,7 +62,7 @@ async def establish_connection_with_handler(drone_id: str):
         return None
 
 PORT = 6000
-drone = "06"
+drone = "09"
 
 async def demo():
     print("Welcome to a test demo!")

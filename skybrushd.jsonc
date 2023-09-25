@@ -2,8 +2,8 @@
   "EXTENSIONS": {
     "crazyflie": {
       "connections": [
-        "crazyradio://0/80/2M/E7E7E7E7",
-        "crazyradio://1/90/2M/E7E7E7E7"
+        "crazyradio://0/80/1M/E7E7E7E7",
+        "crazyradio://1/90/1M/E7E7E7E7",
       ],
       "enabled": true
     },
@@ -34,12 +34,13 @@
         }
       ],
       "cf_port": 1,
-      "TCP_port": 6000
+      "drone_port": 6000,
+      "car_port": 6002,
     },
     "libmotioncapture": {
       "connections": [
         {
-          "hostname": "192.168.1.142",
+          "hostname": "192.168.2.141",
           "type": "optitrack"
         }
       ],
@@ -50,7 +51,7 @@
     },
     "motion_capture": {
       "enabled": true,
-      "frame_rate": 50,
+      "frame_rate": 20,
       "mapping": {
         "rules": [
           {

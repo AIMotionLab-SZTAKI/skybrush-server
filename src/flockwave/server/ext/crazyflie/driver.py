@@ -1077,6 +1077,8 @@ class CrazyflieUAV(UAVBase):
                 ) from None
             else:
                 raise
+        except TimeoutError as ex:
+            print("TIMEOUT ERROR WHILE UPLOADING SHOW!")
 
         assert self._crazyflie is not None
         await self._crazyflie.high_level_commander.set_group_mask(1 << group_index)
@@ -1222,9 +1224,10 @@ class CrazyflieUAV(UAVBase):
         session.configure(graceful_cleanup=True)
 
         # session.create_block(
-        #     "ctrltarget.x",
-        #     "ctrltarget.y",
-        #     "ctrltarget.z",
+        #     "gyro.z",
+        #     "acc.x",
+        #     "acc.y",
+        #     "acc.z",
         #     period=0.2,
         #     handler=self._print_log,
         # )
@@ -1237,24 +1240,19 @@ class CrazyflieUAV(UAVBase):
         #     handler=self._print_log,
         # )
         # return session
-
+        # return session
         return session
         session.create_block(
-            "ctrlGeom.erz",
-            # "Lqr1.dalpha",
-            period=0.5,
+            # "load_pose.qx",
+            # "controller.ctr_roll",
+            # "controller.ctr_pitch",
+            # "controller.ctr_yaw",
+            # "controller.ctr_thrust",
+            # "ctrlLqr1Dof.cmd_pitch",
+            period=0.2,
             handler=self._print_log,
         )
         return session
-
-        # session.create_block(
-        #     "ctrlLqr1Dof.alpha",
-        #     "ctrlLqr1Dof.dalpha",
-        #     "ctrlLqr1Dof.cmd_pitch",
-        #     period=0.2,
-        #     handler=self._print_log,
-        # )
-        # return session
 
     def _update_error_codes(self) -> None:
         """Updates the set of error codes based on what we know about the current

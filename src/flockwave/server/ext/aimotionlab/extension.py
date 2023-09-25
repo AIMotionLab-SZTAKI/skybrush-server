@@ -14,18 +14,86 @@ from trio import sleep_forever
 from .handler import AiMotionMocapFrameHandler
 from typing import Dict, Callable, Union, Tuple, Any, List, Optional
 from flockwave.server.show.trajectory import TrajectorySpecification
-from aiocflib.crazyflie.mem import write_with_checksum
-from aiocflib.crtp.crtpstack import MemoryType
+from aiocflib.crazyflie.mem import MemoryHandler, MemoryHandlerBase, MemoryChannel
+from aiocflib.crtp.crtpstack import MemoryType, CRTPPort
 from aiocflib.utils.checksum import crc32
+from aiocflib.utils.chunks import chunkify
+from aiocflib.errors import error_to_string
 import json
 from copy import deepcopy
+from errno import ENODATA
 
 __all__ = ("aimotionlab", )
 
 
+async def write(self, addr: int, data: bytes, timeout: float = 0.2, attempts: int = 3) -> None:
+    """This function is what is monkey-patched to be used instead of MemoryHandlerBase.write.
+    The only difference is that it can take two extra arguments: timeout and attemps, so that we are able to
+    manually set these if we wish to."""
+    for start, size in chunkify(
+            0, len(data), step=MemoryHandler.MAX_WRITE_REQUEST_LENGTH
+    ):
+        status = await self._write_chunk(addr + start, data[start: (start + size)], timeout=timeout, attempts=attempts)
+        if status:
+            raise IOError(
+                status,
+                "Write request returned error code {0} ({1})".format(
+                    status, error_to_string(status)
+                ),
+            )
+
+
+async def _write_chunk(self, addr: int, data: bytes, timeout: float = 0.2, attempts: int = 3) -> int:
+    """This function is what is monkey-patched to be used instead of MemoryHandlerBase._write_chunk.
+        The only difference is that it can take two extra arguments: timeout and attemps, so that we are able to
+        manually set these if we wish to."""
+    response = await self._crazyflie.run_command(
+        port=CRTPPort.MEMORY,
+        channel=MemoryChannel.WRITE,
+        command=self._addressing_struct.pack(self._element.index, addr),
+        data=data,
+        timeout=timeout,
+        attempts=attempts
+    )
+    return response[0] if response else ENODATA
+MemoryHandlerBase._write_chunk = _write_chunk
+MemoryHandlerBase.write = write
+
+
+async def write_with_checksum(
+    handler: MemoryHandler,
+    addr: int,
+    data: bytes,
+    *,
+    only_if_changed: bool = False,
+    checksum: Callable[[bytes], bytes] = crc32,
+    timeout: float = 0.2,
+    attempts: int = 3
+) -> int:
+    """See aiocflib/crazyflie/mem.py, this is the same function but with extra arguments to provide a different timeout.
+    """
+    expected_chksum = checksum(data)
+    chksum_length = len(expected_chksum)
+
+    if not only_if_changed:
+        need_to_write = True
+    else:
+        observed_chksum = await handler.read(addr, chksum_length)
+        need_to_write = observed_chksum != expected_chksum
+
+    if need_to_write:
+        zeros = bytes([0] * chksum_length)
+        await handler.write(addr, zeros, timeout=timeout, attempts=attempts)
+        await handler.write(addr + chksum_length, data, timeout=timeout, attempts=attempts)
+        await handler.write(addr, expected_chksum, timeout=timeout, attempts=attempts)
+
+    return chksum_length
+
+
+
 # TODO: make a restart command, and use it to handle takeoff commands when the drone is exactly in 0, 0, 0
 class DroneHandler:
-    def __init__(self, uav: CrazyflieUAV, stream: trio.SocketStream, log: logging.Logger, configuration):
+    def __init__(self, uav: CrazyflieUAV, stream: trio.SocketStream, log: logging.Logger, configuration, color):
         self.traj = b''
         self.active_traj_ID = 2
         self.stream_data = b''
@@ -35,8 +103,17 @@ class DroneHandler:
         self.stream = stream
         self.log = log
         self.hover_between = False
+        self.hover_defined = False
         self.memory_partitions = configuration.get("memory_partitions")
         self.crashed = False
+        self.color = color
+
+    def print(self, text):
+        reset_color = "\033[0m"
+        self.log.info(f"{self.color}[drone_{self.uav.id}]: {text}{reset_color}")
+
+    def warning(self, text):
+        self.log.warning(f"[drone_{self.uav.id}]: {text}")
 
     async def define_hover(self):
         trajectory_data = None
@@ -52,9 +129,10 @@ class DroneHandler:
         success, addr = await self.write_safely(1, trajectory_memory, data)
         if success:
             await cf.high_level_commander.define_trajectory(1, addr=addr, type=TrajectoryType.COMPRESSED)
-            self.log.info(f"Defined fallback hover trajectory for drone {self.uav.id}!")
+            self.print("Defined fallback hover.")
         else:
-            self.log.warning(f"Trajectory is too long.")
+            self.warning("Trajectory is too long.")
+        self.hover_defined = True
 
     @staticmethod
     def get_traj_type(self, arg: bytes) -> Tuple[bool, Union[bool, None]]:
@@ -79,26 +157,14 @@ class DroneHandler:
         start_addr = self.memory_partitions[traj_id]["start"]
         allowed_size = self.memory_partitions[traj_id]["size"]
         checksum_length = len(crc32(data))
-        self.log.info(f"drone{self.uav.id}: Checksum length: {checksum_length}, data length: {len(data)}, allowed size: {allowed_size}")
+        self.print(f"Checksum length: {checksum_length}, data length: {len(data)}, allowed size: {allowed_size}")
         if (len(data) + checksum_length <= allowed_size) and traj_id != self.active_traj_ID:
-            # try:
-            #     checksum_length = await write_with_checksum(handler, start_addr, data, only_if_changed=True)
-            #     self.log.info(f"drone{self.uav.id}: Wrote trajectory to address {start_addr}")
-            #     return True, start_addr + checksum_length
-            # except Exception as exc:
-            #     self.log.warning(f"drone{self.uav.id}: Couldn't write because of this exception: {exc!r}. "
-            #                      f"Trying again in 0.1 second.")
-            with trio.move_on_after(2.5):
-                while True:
-                    try:
-                        checksum_length = await write_with_checksum(handler, start_addr, data, only_if_changed=True)
-                        self.log.info(f"drone{self.uav.id}: Wrote trajectory to address {start_addr}")
-                        return True, start_addr + checksum_length
-                    except Exception as exc:
-                        self.log.warning(f"drone{self.uav.id}: Couldn't write because of this exception: {exc!r}. "
-                                         f"Trying again in 0.05 second.")
-                        await sleep(0.05)
-            self.log.warning(f"drone{self.uav.id}: Moved on after 2.5 second of trying to write trajectory. Landing.")
+            try:
+                checksum_length = await write_with_checksum(handler, start_addr, data, only_if_changed=True, timeout=0.8, attempts=3)
+                self.print(f"Wrote trajectory to address {start_addr}")
+                return True, start_addr + checksum_length
+            except Exception as exc:
+                self.warning(f"Couldn't write because of this exception: {exc!r}.")
 
         return False, None
 
@@ -107,38 +173,38 @@ class DroneHandler:
             arg = float(arg)
             if arg < 0.1 or arg > 1.5:
                 arg = 0.5
-                self.log.warning(f"Takeoff height {arg}m is out of allowed range, taking off to 0.5m instead.")
+                self.warning(f"Takeoff height {arg}m is out of allowed range, taking off to 0.5m instead.")
             if self.uav._airborne:
-                self.log.warning(f"Drone {self.uav.id} already airborne, takeoff command wasn't dispatched.")
+                self.warning(f"Already airborne, takeoff command wasn't dispatched.")
                 self.crashed = True
             else:
                 await self.uav.takeoff(altitude=arg)
-                self.log.info(f"Takeoff command dispatched to drone {self.uav.id}.")
+                self.print(f"Takeoff command dispatched.")
                 await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         except ValueError:
-            self.log.warning("Takeoff argument is not a float.")
+            self.warning("Takeoff argument is not a float.")
             self.crashed = True
         except Exception as exc:
-            self.log.warning(f"drone{self.uav.id}: Couldn't take off because of this exception: {exc!r}. ")
+            self.warning(f"Couldn't take off because of this exception: {exc!r}. ")
             self.crashed = True
 
     async def land(self, arg: bytes):
         if self.uav._airborne:
             await self.uav.land()
-            self.log.info(f"Land command dispatched to drone {self.uav.id}.")
+            self.print(f"Land command dispatched.")
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
-            self.log.warning(f"Drone {self.uav.id} is already on the ground, land command wasn't dispatched.")
+            self.warning(f"Already on the ground, land command wasn't dispatched.")
             self.crashed = True
 
     async def handle_transmission(self):
         # await self.stream.send_all(b'Transmission of trajectory started.')
-        self.log.info(f"drone{self.uav.id}: Transmission of trajectory started.")
+        self.print(f"Transmission of trajectory started.")
         start_index = self.stream_data.find(b'{')
         # If the command was 'upload', then a json file must follow. If it doesn't (we can't find the beginning b'{'),
         # then the command or the file was corrupted.
         if start_index == -1:
-            self.log.warning("Corrupted trajectory file.")
+            self.warning("Corrupted trajectory file.")
         else:
             self.traj = self.stream_data[start_index:]
             self.transmission_active = True  # signal we're in the middle of transmission
@@ -146,10 +212,11 @@ class DroneHandler:
                 self.traj += await self.stream.receive_some()  # append the new data to the already received data
             self.traj = self.traj[:-len(b'_EOF')]  # once finished, remove the EOF indicator
             self.transmission_active = False  # then signal that the transmission has ended
-            self.log.info(f"drone{self.uav.id}: Transmission of trajectory finished.")
+            self.print(f"Transmission of trajectory finished.")
             # await self.stream.send_all(b'Transmission of trajectory finished.')
 
     async def upload(self, arg: bytes):
+        upload_time = trio.current_time()
         await self.handle_transmission()
         cf = self.uav._get_crazyflie()
         if self.hover_between:  # TODO: where should this be???? definitely not here
@@ -171,12 +238,12 @@ class DroneHandler:
         if write_success:
             await cf.high_level_commander.define_trajectory(
                 upcoming_traj_ID, addr=addr, type=TrajectoryType.COMPRESSED)
-            self.log.info(
-                f"Defined trajectory on ID {upcoming_traj_ID} for drone {self.uav.id}"
-                f"(currently active ID is {self.active_traj_ID}).")
+            self.print(
+                f"Defined trajectory on ID {upcoming_traj_ID} (currently active ID is {self.active_traj_ID}).")
+            self.warning(f"Writing took {trio.current_time() - upload_time} sec.")
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
-            self.log.warning(f"Trajectory couldn't be written.")
+            self.warning(f"Trajectory couldn't be written.")
             await self.uav.land()
             self.crashed = True
 
@@ -187,26 +254,28 @@ class DroneHandler:
         if (self.uav.is_running_show or self.allow_traj_outside_show) and self.uav._airborne and is_valid:
             await cf.high_level_commander.start_trajectory(upcoming_traj_ID, time_scale=1, relative=is_relative,
                                                            reversed=False)
-            self.log.info(f"Started trajectory on ID {upcoming_traj_ID} for drone {self.uav.id}")
+            self.print(f"Started trajectory on ID {upcoming_traj_ID}.")
             # We are now playing the trajectory with the new ID: adjust the active ID accordingly.
             self.active_traj_ID = upcoming_traj_ID
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
-            self.log.warning(f"Drone {self.uav.id} is not airborne.")
+            self.warning(f"Drone is not airborne.")
             self.crashed = True
 
     async def hover(self, arg: bytes):
+        if not self.hover_defined:
+            await self.define_hover()
         if self.uav._airborne:
             cf = self.uav._get_crazyflie()
             await cf.high_level_commander.start_trajectory(1, time_scale=1, relative=True, reversed=False)
-            self.log.info(f"Hover command dispatched to drone {self.uav.id}.")
+            self.print(f"Hover command dispatched.")
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
-            self.log.warning(f"Drone {self.uav.id} is on the ground, if you want to do a takeoff, do so from Live")
+            self.warning(f"Drone is on the ground, if you want to do a takeoff, do so from Live")
             self.crashed = True
 
     async def command(self, cmd: bytes, arg: bytes):
-        self.log.info(f"Command received for drone {self.uav.id}: {cmd.decode('utf-8')}")
+        self.print(f"Command received: {cmd.decode('utf-8')}")
         # await self.stream.send_all(b'Command received: ' + cmd)
         await self.tcp_command_dict[cmd][0](self, arg)
 
@@ -244,18 +313,18 @@ class DroneHandler:
                         break
                     cmd, arg = self.parse(self.stream_data)
                     if cmd == b'NO_CMDSTART':
-                        self.log.info(f"Command for drone {self.uav.id} is missing standard CMDSTART")
+                        self.print(f"Command is missing standard CMDSTART")
                         break
                     elif cmd == b'WRONG_CMD':
-                        self.log.info(f"Command for drone {self.uav.id} is not found in server side dictionary")
+                        self.print(f"Command is not found in server side dictionary")
                         break
                     elif cmd is None:
-                        self.log.warning(f"None-type command for drone {self.uav.id}")
+                        self.warning(f"None-type command.")
                         break
                     else:
                         await self.command(cmd, arg)
                 except Exception as exc:
-                    self.log.warning(f"TCP handler for drone {self.uav.id} crashed: {exc!r}")
+                    self.warning(f"TCP handler crashed: {exc!r}")
                     break
 
 
@@ -263,12 +332,20 @@ class aimotionlab(Extension):
     """Extension that broadcasts the pose of non-UAV objects to the Crazyflie drones."""
     drone_handlers: List[DroneHandler]
     show_clock: [Optional]
+    car_start: Optional[trio.Event]
 
     def __init__(self):
         super().__init__()
         self.drone_handlers = []
         self.configuration = None
         self.controller_switches: Dict[str, List[List[Union[float, int]]] ] = {}
+        self.car_start = None
+        self.colors = {"04": "\033[92m",
+                       "06": "\033[93m",
+                       "07": "\033[94m",
+                       "08": "\033[96m",
+                       "09": "\033[95m"}
+
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
         uavs: List[CrazyflieUAV] = []
@@ -298,7 +375,8 @@ class aimotionlab(Extension):
         """
         assert self.app is not None
         self.configuration = configuration
-        TCP_PORT = configuration.get("TCP_Port", 6000)
+        DRONE_PORT = configuration.get("drone_port", 6000)
+        CAR_PORT = configuration.get("car_port", 6002)
         port = configuration.get("cf_port", 1)
         channel = configuration.get("channel")
         signals = self.app.import_api("signals")
@@ -327,7 +405,13 @@ class aimotionlab(Extension):
                         }
                     )
                 )
-                await trio.serve_tcp(self.establish_drone_handler, TCP_PORT, handler_nursery=nursery)
+                nursery.start_soon(partial(trio.serve_tcp, handler=self.establish_drone_handler,
+                                           port=DRONE_PORT, handler_nursery=nursery))
+                nursery.start_soon(partial(trio.serve_tcp, handler=self.handle_car,
+                                           port=CAR_PORT, handler_nursery=nursery))
+                # await trio.serve_tcp(self.establish_drone_handler, DRONE_PORT, handler_nursery=nursery)
+                # self.log.warning(f"Serving {CAR_PORT} TCP port!")
+                # await trio.serve_tcp(self.handle_car, CAR_PORT, handler_nursery=nursery)
 
     def _on_show_upload(self, sender, controllers):
         if controllers[1] is None:
@@ -343,7 +427,6 @@ class aimotionlab(Extension):
     def _on_show_start(self, sender, *, nursery):
         if len(self.controller_switches) > 0:
             start_time = trio.current_time()
-
             # save this so we can clear self.controller_switches and avoid 'leftover' switches from previous uploads.
             # In other words, if we want to include controller switches, we must do a fresh upload before a show start
             controller_switches = deepcopy(self.controller_switches)
@@ -353,6 +436,10 @@ class aimotionlab(Extension):
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
                 controller_switches = [[start_time + controller_switch[0], controller_switch[1]] for controller_switch in controller_switches[uav_id]]
                 nursery.start_soon(self._perform_controller_switches, uav, controller_switches)
+
+        if self.car_start is not None and not self.car_start.is_set():
+            self.log.info("START CAR!")
+            self.car_start.set()
 
     async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
         if uav.is_in_drone_show_mode:
@@ -395,17 +482,21 @@ class aimotionlab(Extension):
             # The client will send a request for a drone handler beginning with REQ_, i.e.: REQ_06
             if 'REQ_' in request:
                 requested_id = request.split('REQ_')[1]
+                if requested_id not in available_ids:
+                    self.log.warning(f"The requested ID isn't available.")
+                    await drone_stream.send_all(b'ACK_00')
+                    return
             else:
                 self.log.warning(f"Wrong request.")
                 await drone_stream.send_all(b'ACK_00')
+                return
             try:
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(requested_id)
-                handler = DroneHandler(uav, drone_stream, self.log, self.configuration)
+                handler = DroneHandler(uav, drone_stream, self.log, self.configuration, color=self.colors[uav.id])
                 self.drone_handlers.append(handler)
                 self.log.info(f"Made handler for drone {requested_id}. "
                               f"Currently we have handlers for the following drones: "
                               f"{[handler.uav.id for handler in self.drone_handlers]}")
-                await handler.define_hover()
                 acknowledgement = f"ACK_{requested_id}"
                 await drone_stream.send_all(acknowledgement.encode('utf-8'))
                 await handler.listen()
@@ -420,5 +511,9 @@ class aimotionlab(Extension):
             self.log.warning(f"All drone IDs are accounted for.")
             await drone_stream.send_all(b'ACK_00')
 
-
+    async def handle_car(self, car_stream: trio.SocketStream):
+        self.log.warning(f"Got a car connection!")
+        self.car_start = trio.Event()
+        await self.car_start.wait()
+        await car_stream.send_all(b'4')
 
