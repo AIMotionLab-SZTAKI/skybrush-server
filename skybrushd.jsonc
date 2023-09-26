@@ -35,7 +35,6 @@
       ],
       "cf_port": 1,
       "drone_port": 6000,
-      "car_port": 6002,
     },
     "libmotioncapture": {
       "connections": [

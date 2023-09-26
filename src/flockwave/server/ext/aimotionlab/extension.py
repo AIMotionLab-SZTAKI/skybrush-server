@@ -339,12 +339,13 @@ class aimotionlab(Extension):
         self.drone_handlers = []
         self.configuration = None
         self.controller_switches: Dict[str, List[List[Union[float, int]]] ] = {}
-        self.car_start = None
         self.colors = {"04": "\033[92m",
                        "06": "\033[93m",
                        "07": "\033[94m",
                        "08": "\033[96m",
                        "09": "\033[95m"}
+        self.car_streams: List[trio.SocketStream] = []
+        self.port_features: List[Tuple[int, Callable]] = []
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -376,7 +377,10 @@ class aimotionlab(Extension):
         assert self.app is not None
         self.configuration = configuration
         DRONE_PORT = configuration.get("drone_port", 6000)
-        CAR_PORT = configuration.get("car_port", 6002)
+        self.port_features.append((DRONE_PORT, self.establish_drone_handler))
+        CAR_PORT = DRONE_PORT+1
+        self.port_features.append((CAR_PORT, self.car_broadcast))
+
         port = configuration.get("cf_port", 1)
         channel = configuration.get("channel")
         signals = self.app.import_api("signals")
@@ -405,13 +409,20 @@ class aimotionlab(Extension):
                         }
                     )
                 )
-                nursery.start_soon(partial(trio.serve_tcp, handler=self.establish_drone_handler,
-                                           port=DRONE_PORT, handler_nursery=nursery))
-                nursery.start_soon(partial(trio.serve_tcp, handler=self.handle_car,
-                                           port=CAR_PORT, handler_nursery=nursery))
-                # await trio.serve_tcp(self.establish_drone_handler, DRONE_PORT, handler_nursery=nursery)
-                # self.log.warning(f"Serving {CAR_PORT} TCP port!")
-                # await trio.serve_tcp(self.handle_car, CAR_PORT, handler_nursery=nursery)
+                for port, func in self.port_features:
+                    nursery.start_soon(partial(trio.serve_tcp, handler=func, port=port, handler_nursery=nursery))
+
+    async def car_broadcast(self, stream: trio.SocketStream):
+        self.car_streams.append(stream)
+        self.log.info(f"Number of connections for car port changed to {len(self.car_streams)}")
+        data = b''
+        while not data.startswith(b'-1'):
+            data = await stream.receive_some()
+            if len(data) > 0:
+                for target_stream in [other_stream for other_stream in self.car_streams if other_stream != stream]:
+                    await target_stream.send_all(data)
+        self.car_streams.remove(stream)
+        self.log.info(f"Number of connections for car port changed to {len(self.car_streams)}")
 
     def _on_show_upload(self, sender, controllers):
         if controllers[1] is None:
@@ -436,10 +447,8 @@ class aimotionlab(Extension):
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
                 controller_switches = [[start_time + controller_switch[0], controller_switch[1]] for controller_switch in controller_switches[uav_id]]
                 nursery.start_soon(self._perform_controller_switches, uav, controller_switches)
-
-        if self.car_start is not None and not self.car_start.is_set():
-            self.log.info("START CAR!")
-            self.car_start.set()
+        for stream in self.car_streams:
+            nursery.start_soon(stream.send_all, b'4')
 
     async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
         if uav.is_in_drone_show_mode:
@@ -500,8 +509,7 @@ class aimotionlab(Extension):
                 acknowledgement = f"ACK_{requested_id}"
                 await drone_stream.send_all(acknowledgement.encode('utf-8'))
                 await handler.listen()
-                self.drone_handlers = [drone_handler for drone_handler in self.drone_handlers
-                                       if drone_handler.uav.id != handler.uav.id]
+                self.drone_handlers.remove(handler)
                 self.log.info(f"Removing handler for drone {handler.uav.id}. Remaining handlers:"
                               f"{[drone_handler.uav.id for drone_handler in self.drone_handlers]}")
             except KeyError:
@@ -511,9 +519,4 @@ class aimotionlab(Extension):
             self.log.warning(f"All drone IDs are accounted for.")
             await drone_stream.send_all(b'ACK_00')
 
-    async def handle_car(self, car_stream: trio.SocketStream):
-        self.log.warning(f"Got a car connection!")
-        self.car_start = trio.Event()
-        await self.car_start.wait()
-        await car_stream.send_all(b'4')
 
