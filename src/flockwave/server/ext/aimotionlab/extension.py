@@ -448,7 +448,8 @@ class aimotionlab(Extension):
                 controller_switches = [[start_time + controller_switch[0], controller_switch[1]] for controller_switch in controller_switches[uav_id]]
                 nursery.start_soon(self._perform_controller_switches, uav, controller_switches)
         for stream in self.car_streams:
-            nursery.start_soon(stream.send_all, b'4')
+            self.log.info("Starting car!")
+            nursery.start_soon(stream.send_all, b'6')
 
     async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
         if uav.is_in_drone_show_mode:
