@@ -1077,8 +1077,6 @@ class CrazyflieUAV(UAVBase):
                 ) from None
             else:
                 raise
-        except TimeoutError as ex:
-            print("TIMEOUT ERROR WHILE UPLOADING SHOW!")
 
         assert self._crazyflie is not None
         await self._crazyflie.high_level_commander.set_group_mask(1 << group_index)

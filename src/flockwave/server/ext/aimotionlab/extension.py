@@ -26,14 +26,14 @@ class aimotionlab(Extension):
         super().__init__()
         self.drone_handlers = []
         self.configuration = None
-        self.controller_switches: Dict[str, List[List[Union[float, int]]] ] = {}
+        self.controller_switches: Dict[str, List[List[Union[float, int]]]] = {}
         self.colors = {"04": "\033[92m",
                        "06": "\033[93m",
                        "07": "\033[94m",
                        "08": "\033[96m",
                        "09": "\033[95m"}
-        self.streams: Dict[int, List[trio.SocketStream]] = {}
-        self.port_features: Dict[int, Callable] = {}
+        self.streams: Dict[int, List[trio.SocketStream]] = {}  # a dictionary for the tcp ports where we broadcast
+        self.port_features: Dict[int, Callable] = {}  # a dictionary of what functions we should use for each tcp port
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -143,9 +143,14 @@ class aimotionlab(Extension):
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
                 controller_switches = [[start_time + controller_switch[0], controller_switch[1]] for controller_switch in controller_switches[uav_id]]
                 nursery.start_soon(self._perform_controller_switches, uav, controller_switches)
-        for stream in self.car_streams:
+        CAR_PORT = self.configuration.get("drone_port", 6000)+1
+        SIM_PORT = CAR_PORT + 1
+        for stream in self.streams[CAR_PORT]:
             self.log.info("Starting car!")
             nursery.start_soon(stream.send_all, b'6')
+        for stream in self.streams[SIM_PORT]:
+            self.log.info("Starting Sim!")
+            nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
     async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
         if uav.is_in_drone_show_mode:

@@ -149,7 +149,7 @@ class DroneHandler:
         self.print(f"Checksum length: {checksum_length}, data length: {len(data)}, allowed size: {allowed_size}")
         if (len(data) + checksum_length <= allowed_size) and traj_id != self.active_traj_ID:
             try:
-                checksum_length = await write_with_checksum(handler, start_addr, data, only_if_changed=True, timeout=0.8, attempts=3)
+                checksum_length = await write_with_checksum(handler, start_addr, data, only_if_changed=True, timeout=1.25, attempts=2)
                 self.print(f"Wrote trajectory to address {start_addr}")
                 return True, start_addr + checksum_length
             except Exception as exc:
@@ -168,7 +168,7 @@ class DroneHandler:
                 self.crashed = True
             else:
                 await self.uav.takeoff(altitude=arg)
-                self.print(f"Takeoff command dispatched.")
+                self.print(f"Takeoff command dispatched, height={arg}")
                 await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         except ValueError:
             self.warning("Takeoff argument is not a float.")
