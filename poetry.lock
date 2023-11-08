@@ -1181,18 +1181,26 @@ ports = ["python-rtmidi (>=1.1.0)"]
 
 [[package]]
 name = "motioncapture"
-version = "1.0a1"
+version = "1.0a2"
 description = "Interface for common motion capture systems"
 category = "main"
 optional = false
 python-versions = "*"
 files = [
-    {file = "motioncapture-1.0a1-cp310-cp310-linux_x86_64.whl", hash = "sha256:799a8ec46027f5ee1167f9ec154b44fafbaa37736ac3bb60cad4b01f5de5e9ea"},
+    {file = "motioncapture-1.0a2-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:aa67143db0a0df5cc21e3cc60f9b4185c624c3f00599d515a15f8216e516cb3e"},
+    {file = "motioncapture-1.0a2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c0c7b1ff9b0e1886182ac242e348cfc4415b8bbb2cb2cdb18ff0d9999625a732"},
+    {file = "motioncapture-1.0a2-cp310-cp310-win_amd64.whl", hash = "sha256:f5568e6ca5e64dd81cd31852943eb10fa82dc0a0b7a4896009cfcd84b72a92f3"},
+    {file = "motioncapture-1.0a2-cp311-cp311-macosx_12_0_universal2.whl", hash = "sha256:09698deb0e5e8a4bcb584588247c06c024ab950a0fcef69a63fbf9111c0ea31f"},
+    {file = "motioncapture-1.0a2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ab91570e3d8b7045170cf2884c4ce928fbb3257f4cbe403289e697c395cfc229"},
+    {file = "motioncapture-1.0a2-cp311-cp311-win_amd64.whl", hash = "sha256:e200833f07da541587ecd53605dc9d37db1a77322aa8864d15cfadc495272107"},
+    {file = "motioncapture-1.0a2-cp38-cp38-macosx_12_0_x86_64.whl", hash = "sha256:8ab5f9477e2a03b63dad9185eaff71ee1e6125bdad65518f491d44f8306d27bd"},
+    {file = "motioncapture-1.0a2-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5b6560a4f5b79b0731a335d2294ea8bbd1d1fc155d2ce3db10a1849671350b1c"},
+    {file = "motioncapture-1.0a2-cp38-cp38-win_amd64.whl", hash = "sha256:17373dd4e0c54110ede51be5ca4a5c40f00553bfaf9fa98d90b8ead469497647"},
+    {file = "motioncapture-1.0a2-cp39-cp39-macosx_12_0_x86_64.whl", hash = "sha256:71964daaf5cb9a99506aed075996dfef93da3d4ca3a15726e1d6e7f0f68881fc"},
+    {file = "motioncapture-1.0a2-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8330ee3189afb03cc8be1f481a653d738298ea80d7565fd5cedd0c748071eb84"},
+    {file = "motioncapture-1.0a2-cp39-cp39-win_amd64.whl", hash = "sha256:f93a0504f9364f9087885883cdaf32cc0b365bc5126b2b226cd78890466bc823"},
+    {file = "motioncapture-1.0a2.tar.gz", hash = "sha256:f5a042b10d2d4dc10564287aead3a9a36e213df6907a82fd72f03b2df38b8e17"},
 ]
-
-[package.source]
-type = "file"
-url = "../libmotioncapture/dist/motioncapture-1.0a1-cp310-cp310-linux_x86_64.whl"
 
 [[package]]
 name = "msgpack"
@@ -2314,4 +2322,4 @@ pro = ["skybrush-ext-map-cache", "skybrush-ext-sidekick", "skybrush-ext-timecode
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.8"
-content-hash = "e2e3c9c71f8f0463835a65635fcd6d22ea49c9377a24b096680de15c46848c0c"
+content-hash = "2cc66ea8bb4502a4414e4ddc86826df78e2e88e66c5e639bcee5c2aed330e922"
