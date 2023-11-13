@@ -34,15 +34,17 @@ async def establish_connection_with_handler(drone_id: str):
         raise NotImplementedError # immediately stop if we couldn't reach one of the drones
 
 PORT = 6000
-drones = ["09", "04", "07"]
-
+drones = ["09", "08", "07"]
+heights = {"09": 1.2,
+           "08": 1,
+           "07": 0.8}
 
 async def takeoff_all(sockets: Dict[str, trio.SocketStream]):
     usr_input = input('type "takeoff"\n>')
     while usr_input != "takeoff":
         usr_input = input('type "takeoff"\n>')
     for drone_ID, socket in sockets.items():
-        height = float(drone_ID)/10 + 0.3
+        height = heights[drone_ID]
         await socket.send_all(takeoff(height))
         ack = b""
         while ack != b"ACK":

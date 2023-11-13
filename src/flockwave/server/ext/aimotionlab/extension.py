@@ -19,7 +19,6 @@ __all__ = ("aimotionlab", )
 class aimotionlab(Extension):
     """Extension that broadcasts the pose of non-UAV objects to the Crazyflie drones."""
     drone_handlers: List[DroneHandler]
-    show_clock: [Optional]
     car_start: Optional[trio.Event]
 
     def __init__(self):
@@ -78,7 +77,6 @@ class aimotionlab(Extension):
         signals = self.app.import_api("signals")
         broadcast = self.app.import_api("crazyflie").broadcast
         self.log.info("The new extension is now running.")
-        self.show_clock = self.app.import_api("show").get_clock  # maybe show clock instead of sleep_until?
 
         await sleep(1.0)
         with ExitStack() as stack:
@@ -162,9 +160,6 @@ class aimotionlab(Extension):
                     await uav.set_parameter("stabilizer.controller", switch_controller)
         else:
             return
-        # await sleep(5)
-        # if self.show_clock is not None:
-        #     print(self.show_clock().seconds)
 
     def _on_motion_capture_frame_received(
             self,
@@ -203,7 +198,8 @@ class aimotionlab(Extension):
                 return
             try:
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(requested_id)
-                handler = DroneHandler(uav, drone_stream, self.log, self.configuration, color=self.colors[uav.id])
+                color = self.colors[uav.id] if uav.id in self.colors else "\033[92m"
+                handler = DroneHandler(uav, drone_stream, self.log, self.configuration, color=color)
                 self.drone_handlers.append(handler)
                 self.log.info(f"Made handler for drone {requested_id}. "
                               f"Currently we have handlers for the following drones: "
