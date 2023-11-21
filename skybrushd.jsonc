@@ -9,6 +9,7 @@
     },
     "aimotionlab": {
       "channel": 1,
+      "cf_port": 1,
       "configWord": "This is a config word for the aimotionlab extension",
       "enabled": true,
       "memory_partitions": [
@@ -33,7 +34,6 @@
           "start": 2141
         }
       ],
-      "cf_port": 1,
       "drone_port": 6000,
     },
     "libmotioncapture": {

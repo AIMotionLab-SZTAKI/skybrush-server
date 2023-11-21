@@ -154,7 +154,6 @@ class DroneHandler:
                 return True, start_addr + checksum_length
             except Exception as exc:
                 self.warning(f"Couldn't write because of this exception: {exc!r}.")
-
         return False, None
 
     async def takeoff(self, arg: bytes):
@@ -214,11 +213,11 @@ class DroneHandler:
         try:
             trajectory_memory = await cf.mem.find(MemoryType.TRAJECTORY)
         except ValueError:
-            raise RuntimeError("Trajectories are not supported on this drone") from None
             self.crashed = True
-        # print(self.traj.decode('utf-8'))
+            raise RuntimeError("Trajectories are not supported on this drone") from None
         trajectory_data = json.loads(self.traj.decode('utf-8'))
         trajectory = TrajectorySpecification(trajectory_data)
+        #TODO: different encodings!
         data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.COMPRESSED)
         # The trajectory IDs we upload to are 2 and 3, we swap between them like so:
         upcoming_traj_ID = 5 - self.active_traj_ID
@@ -270,11 +269,11 @@ class DroneHandler:
 
     tcp_command_dict: Dict[
         bytes, Tuple[Callable[[Any, bytes], None], bool]] = {
-        b"takeoff": (takeoff, True),  # The command takeoff expects a takeoff height as its argument
-        b"land": (land, False),  # The command land takes no argument
-        b"upload": (upload, True),  # The command upload takes no argument
-        b"hover": (hover, False),  # The command hover takes no argument and expects no payload
-        b"start": (start, True),  # The command start expects the trajectory type as its argument
+        b"takeoff": (takeoff, True),
+        b"land": (land, False),
+        b"upload": (upload, True),
+        b"hover": (hover, False),
+        b"start": (start, True),
     }
 
     def parse(self, raw_data: bytes, ) -> Tuple[Union[bytes, None], Union[bytes, None]]:

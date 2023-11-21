@@ -61,6 +61,7 @@ class aimotionlab(Extension):
             logger: Python logger object that the extension may use. Also
                 available as ``self.log``.
         """
+        #TODO: configure()
         assert self.app is not None
         self.configuration = configuration
         DRONE_PORT = configuration.get("drone_port", 6000)
@@ -119,6 +120,7 @@ class aimotionlab(Extension):
         self.log.info(f"Number of connections on port {port} changed to {len(self.streams[port])}")
 
     def _on_show_upload(self, sender, controllers):
+        #TODO: move self.controller_switches = {} somewhere here?
         if controllers[1] is None:
             if controllers[0] in self.controller_switches:
                 del self.controller_switches[controllers[0]]
@@ -151,6 +153,7 @@ class aimotionlab(Extension):
             nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
     async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
+        # TODO: rework sleeps
         if uav.is_in_drone_show_mode:
             for switch in switches:
                 switch_time = switch[0]
@@ -216,5 +219,3 @@ class aimotionlab(Extension):
         else:  # if there aren't any drones left, tell them that
             self.log.warning(f"All drone IDs are accounted for.")
             await drone_stream.send_all(b'ACK_00')
-
-

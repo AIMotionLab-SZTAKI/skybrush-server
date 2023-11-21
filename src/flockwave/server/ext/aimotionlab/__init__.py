@@ -11,7 +11,7 @@ async ``run()`` function in this file, or by providing a synchronous
 invoked with no arguments. The extension returned from the ``construct()``
 method must be an object derived from ``flockwave.server.ext.base.Extension``.
 When using the ``run()`` function, the entire module will be the extension;
-whemn using an instance, the extension itself is the object returned from
+when using an instance, the extension itself is the object returned from
 ``construct()``.  The former approach is preferred for simpler, mostly
 stateless extensions (state can be stored in module-level variables). The
 latter is preferred for more complex extensions as they can use the constructed
@@ -25,7 +25,7 @@ __all__ = ("construct", )
 description = "Template for Skybrush Server extensions"
 """The description of the extension that appears on the Skybrush server UI"""
 
-dependencies = ()
+dependencies = () # TODO
 """List of the names of other extensions that this extension depends on."""
 
 tags = ("aimotionlab", "experimental")
