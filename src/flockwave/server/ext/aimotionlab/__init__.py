@@ -25,7 +25,7 @@ __all__ = ("construct", )
 description = "Template for Skybrush Server extensions"
 """The description of the extension that appears on the Skybrush server UI"""
 
-dependencies = () # TODO
+dependencies = ("crazyflie", "signals", "show")
 """List of the names of other extensions that this extension depends on."""
 
 tags = ("aimotionlab", "experimental")
@@ -37,7 +37,66 @@ Tags typically have no semantic meaning, but they are useful to organize
 extensions into categories.
 """
 
-schema = {}
+schema = {
+    "properties": {
+        "channel": {
+            "type": "integer",
+            "default": 1,
+            "description": (
+                "The CRTP channel where the extension will send passive objects' poses."
+            ),
+        },
+        "cf_port": {
+            "type": "integer",
+            "default": 1,
+            "description": (
+                "The CRTP port where the extension will send passive objects' poses."
+            ),
+        },
+        "configWord": {
+            "type": "string",
+            "description": (
+                "A configuration word, used for debugging and demonstrating the use of config schema."
+            ),
+        },
+        "drone_port": {
+            "type": "integer",
+            "description": (
+                "The TCP port number where the extension expects clients to connect, in order"
+                "to send command to the drones from scripts."
+            ),
+        },
+        "memory_partitions": {
+            "type": "array",
+            "description": (
+                "The array of dictionaries describing the partitions of the crazyflie's trajectory memory."
+                "A partition is defined by its ID number, its size, and the start of the partition."
+                "Note that defining these partitions so they don't overlap is the responsibility of whoever"
+                "is writing skybrushd.jsonc. The server will not double-check whether they overlap. It will"
+                "only check whether a given trajectory fits into the trajectory partition specified by a given ID."
+                "Dynamic partitions are the ones between which we swap when uploading trajectories dynamically."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "ID": {
+                        "type": "integer"
+                    },
+                    "size": {
+                        "type": "integer"
+                    },
+                    "start": {
+                        "type": "integer"
+                    },
+                    "dynamic": {
+                        "type": "boolean"
+                    }
+                }
+            }
+
+        }
+    }
+}
 """A JSON Schema description of the configuration object of the extension.
 Refer to https://json-schema.org for more details, and take a look at a few
 real Skybrush Server extensions for inspiration.

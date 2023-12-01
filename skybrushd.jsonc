@@ -10,28 +10,33 @@
     "aimotionlab": {
       "channel": 1,
       "cf_port": 1,
+      "drone_port": 6000,
       "configWord": "This is a config word for the aimotionlab extension",
       "enabled": true,
       "memory_partitions": [
         {
           "ID": 0,
           "size": 100,
-          "start": 1
+          "start": 1,
+          "dynamic": false
         },
         {
           "ID": 1,
-          "size": 50,
-          "start": 101
+          "size": 100,
+          "start": 104,
+          "dynamic": false
         },
         {
           "ID": 2,
-          "size": 1950,
-          "start": 151
+          "size": 3980,
+          "start": 208,
+          "dynamic": true
         },
         {
           "ID": 3,
-          "size": 1950,
-          "start": 2141
+          "size": 3980,
+          "start": 4200,
+          "dynamic": true
         }
       ],
       "drone_port": 6000,

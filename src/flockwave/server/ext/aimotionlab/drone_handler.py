@@ -3,7 +3,7 @@ import trio
 from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
 from flockwave.server.ext.crazyflie.trajectory import encode_trajectory, TrajectoryEncoding
 from aiocflib.crazyflie.high_level_commander import TrajectoryType
-from typing import Dict, Callable, Union, Tuple, Any
+from typing import Dict, Callable, Union, Tuple, Any, List
 from flockwave.server.show.trajectory import TrajectorySpecification
 from aiocflib.crtp.crtpstack import MemoryType
 from aiocflib.utils.checksum import crc32
@@ -84,7 +84,6 @@ async def write_with_checksum(
 class DroneHandler:
     def __init__(self, uav: CrazyflieUAV, stream: trio.SocketStream, log: logging.Logger, configuration, color):
         self.traj = b''
-        self.active_traj_ID = 2
         self.stream_data = b''
         self.transmission_active = False
         self.allow_traj_outside_show = True
@@ -93,9 +92,19 @@ class DroneHandler:
         self.log = log
         self.hover_between = False
         self.hover_defined = False
-        self.memory_partitions = configuration.get("memory_partitions")
+        self.memory_partitions: List[Dict] = configuration.get("memory_partitions")
+        self.active_traj_ID: int = max(partition["ID"] for partition in self.memory_partitions)
+        self.traj_ID_sum: int = sum(partition["ID"] for partition in self.memory_partitions if partition["dynamic"])
         self.crashed = False
         self.color = color
+        # Memory partitions are a list of dictionaries. However, we may not have the IDs in order of
+        # how they were stored in skybrushd.jsonc, so we reformat it to a dictionary
+        self.memory_partitions: Dict[int, Dict] = {partition["ID"]: {"size": partition["size"],
+                                                                     "start": partition["start"]}
+                                                   for partition in self.memory_partitions}
+
+    def upcoming_traj(self):
+        return self.traj_ID_sum - self.active_traj_ID
 
     def print(self, text):
         reset_color = "\033[0m"
@@ -217,17 +226,22 @@ class DroneHandler:
             raise RuntimeError("Trajectories are not supported on this drone") from None
         trajectory_data = json.loads(self.traj.decode('utf-8'))
         trajectory = TrajectorySpecification(trajectory_data)
-        #TODO: different encodings!
-        data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.COMPRESSED)
-        # The trajectory IDs we upload to are 2 and 3, we swap between them like so:
-        upcoming_traj_ID = 5 - self.active_traj_ID
+        traj_type = trajectory._data.get("type", "COMPRESSED")
+        encoding = TrajectoryEncoding.POLY4D if traj_type == "POLY4D" else TrajectoryEncoding.COMPRESSED
+        data = encode_trajectory(trajectory, encoding=encoding)
         # Try to write the data (at this point we don't know whether it's too long or not, write_safely will tell)
-        write_success, addr = await self.write_safely(upcoming_traj_ID, trajectory_memory, data)
+        write_success, addr = await self.write_safely(self.upcoming_traj(), trajectory_memory, data)
         if write_success:
-            await cf.high_level_commander.define_trajectory(
-                upcoming_traj_ID, addr=addr, type=TrajectoryType.COMPRESSED)
+            if encoding == TrajectoryEncoding.POLY4D:
+                await cf.high_level_commander.define_trajectory(
+                    self.upcoming_traj(), addr=addr, num_pieces=len(trajectory._data.get("points"))-1, type=TrajectoryType.POLY4D
+                )
+                await cf.high_level_commander.set_group_mask()
+            else:
+                await cf.high_level_commander.define_trajectory(
+                    self.upcoming_traj(), addr=addr, type=TrajectoryType.COMPRESSED)
             self.print(
-                f"Defined trajectory on ID {upcoming_traj_ID} (currently active ID is {self.active_traj_ID}).")
+                f"Defined {traj_type} trajectory on ID {self.upcoming_traj()} (currently active ID is {self.active_traj_ID}).")
             self.warning(f"Writing took {trio.current_time() - upload_time} sec.")
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
@@ -238,13 +252,12 @@ class DroneHandler:
     async def start(self, arg: bytes):
         cf = self.uav._get_crazyflie()
         is_valid, is_relative = self.get_traj_type(self, arg=arg)
-        upcoming_traj_ID = 5 - self.active_traj_ID
-        if (self.uav.is_running_show or self.allow_traj_outside_show) and self.uav._airborne and is_valid:
-            await cf.high_level_commander.start_trajectory(upcoming_traj_ID, time_scale=1, relative=is_relative,
+        if (self.uav.is_running_show or self.allow_traj_outside_show) and is_valid:
+            await cf.high_level_commander.start_trajectory(self.upcoming_traj(), time_scale=1, relative=is_relative,
                                                            reversed=False)
-            self.print(f"Started trajectory on ID {upcoming_traj_ID}.")
+            self.print(f"Started trajectory on ID {self.upcoming_traj()}.")
             # We are now playing the trajectory with the new ID: adjust the active ID accordingly.
-            self.active_traj_ID = upcoming_traj_ID
+            self.active_traj_ID = self.upcoming_traj()
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         else:
             self.warning(f"Drone is not airborne.")
@@ -262,6 +275,20 @@ class DroneHandler:
             self.warning(f"Drone is on the ground, if you want to do a takeoff, do so from Live")
             self.crashed = True
 
+    async def set_param(self, arg: bytes):
+        # arg should look something like this: b'stabilizer.controller=1'
+        try:
+            param, value = arg.split(b'=')
+            param = param.decode()
+            value = float(value)
+            if param != await self.uav.get_parameter(param):
+                await self.uav.set_parameter(param, value)
+                self.print(f"Set {param} to {value}")
+        except Exception as exc:
+            self.warning(f"Exception while setting parameter: {exc!r}")
+        # failure to set a parameter usually doesn't result in catastrophic failure so reply anyway
+        await self.stream.send_all(b'ACK')
+
     async def command(self, cmd: bytes, arg: bytes):
         self.print(f"Command received: {cmd.decode('utf-8')}")
         # await self.stream.send_all(b'Command received: ' + cmd)
@@ -274,6 +301,7 @@ class DroneHandler:
         b"upload": (upload, True),
         b"hover": (hover, False),
         b"start": (start, True),
+        b"param": (set_param, True)
     }
 
     def parse(self, raw_data: bytes, ) -> Tuple[Union[bytes, None], Union[bytes, None]]:

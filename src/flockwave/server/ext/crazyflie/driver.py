@@ -417,11 +417,11 @@ class CrazyflieDriver(UAVDriver["CrazyflieUAV"]):
                 "stabilizer.controller", int(self.preferred_controller)
             )
 
-        controllers = show.get("controllers", None)
+        parameters = show.get("parameters", None)
         assert self.app is not None
-        controllers = (uav.id, controllers)
+        parameters = (uav.id, parameters)
         upload_signal = self.app.import_api("signals").get("show:upload")
-        upload_signal.send(self, controllers=controllers)
+        upload_signal.send(self, parameters=parameters)
 
     handle_command_color = create_color_command_handler()
     handle_command_motoroff = handle_command_stop
@@ -1382,7 +1382,7 @@ class CrazyflieUAV(UAVBase):
         print(f"trajectory type: {traj_type}")
         if traj_type == "POLY4D":
             data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.POLY4D)
-            print(f"length of data without checksum: {len(data)}, {len(trajectory._data.get('points'))} segments")
+            print(f"length of data without checksum: {len(data)}, {len(trajectory._data.get('points'))-1} segments")
             addr = await write_with_checksum(
                 trajectory_memory, 0, data, only_if_changed=True
             )
@@ -1392,7 +1392,7 @@ class CrazyflieUAV(UAVBase):
                 await fence_config.apply(self.fence, trajectory)
             # Now we can define the entire trajectory as well
             await cf.high_level_commander.define_trajectory(
-                0, addr=addr, num_pieces=len(trajectory._data.get("points")), type=TrajectoryType.POLY4D
+                0, addr=addr, num_pieces=len(trajectory._data.get("points"))-1, type=TrajectoryType.POLY4D
             )
         else:
             data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.COMPRESSED)

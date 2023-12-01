@@ -1,4 +1,5 @@
 import trio
+from flockwave.ext.base import Configuration
 from trio import sleep, sleep_until
 from flockwave.server.app import SkybrushServer
 from flockwave.server.ext.base import Extension
@@ -25,7 +26,7 @@ class aimotionlab(Extension):
         super().__init__()
         self.drone_handlers = []
         self.configuration = None
-        self.controller_switches: Dict[str, List[List[Union[float, int]]]] = {}
+        self.parameters: Dict[str, List[List[Union[float, str, int]]]] = {}
         self.colors = {"04": "\033[92m",
                        "06": "\033[93m",
                        "07": "\033[94m",
@@ -45,6 +46,19 @@ class aimotionlab(Extension):
             pass
             # self.log.warning(f"Connection lost to crazyflie.")
 
+    def configure(self, configuration: Configuration) -> None:
+        super().configure(configuration)
+        assert self.app is not None
+        self.configuration = configuration
+        DRONE_PORT = configuration.get("drone_port", 6000)
+        self.port_features[DRONE_PORT] = self.establish_drone_handler
+        CAR_PORT = DRONE_PORT+1
+        self.port_features[CAR_PORT] = partial(self._broadcast, port=CAR_PORT)
+        self.streams[CAR_PORT] = []
+        SIM_PORT = DRONE_PORT+2
+        self.port_features[SIM_PORT] = partial(self._broadcast, port=SIM_PORT)
+        self.streams[SIM_PORT] = []
+
     async def run(self, app: "SkybrushServer", configuration, logger):
         """This function is called when the extension was loaded.
 
@@ -61,28 +75,14 @@ class aimotionlab(Extension):
             logger: Python logger object that the extension may use. Also
                 available as ``self.log``.
         """
-        #TODO: configure()
-        assert self.app is not None
-        self.configuration = configuration
-        DRONE_PORT = configuration.get("drone_port", 6000)
-        self.port_features[DRONE_PORT] = self.establish_drone_handler
-        CAR_PORT = DRONE_PORT+1
-        self.port_features[CAR_PORT] = partial(self._broadcast, port=CAR_PORT)
-        self.streams[CAR_PORT] = []
-        SIM_PORT = DRONE_PORT+2
-        self.port_features[SIM_PORT] = partial(self._broadcast, port=SIM_PORT)
-        self.streams[SIM_PORT] = []
 
-        port = configuration.get("cf_port", 1)
-        channel = configuration.get("channel")
         signals = self.app.import_api("signals")
         broadcast = self.app.import_api("crazyflie").broadcast
         self.log.info("The new extension is now running.")
-
         await sleep(1.0)
         with ExitStack() as stack:
             # create a dedicated mocap frame handler
-            frame_handler = AiMotionMocapFrameHandler(broadcast, port, channel)
+            frame_handler = AiMotionMocapFrameHandler(broadcast, configuration.get("cf_port", 1), configuration.get("channel"))
             # subscribe to the motion capture frame signal
             async with trio.open_nursery() as nursery:
                 stack.enter_context(
@@ -119,30 +119,17 @@ class aimotionlab(Extension):
         self.streams[port].remove(stream)
         self.log.info(f"Number of connections on port {port} changed to {len(self.streams[port])}")
 
-    def _on_show_upload(self, sender, controllers):
-        #TODO: move self.controller_switches = {} somewhere here?
-        if controllers[1] is None:
-            if controllers[0] in self.controller_switches:
-                del self.controller_switches[controllers[0]]
-                self.log.warning(f"Previously saved controller switch deleted for drone {controllers[0]}")
-            else:
-                pass
-        else:
-            self.log.warning(f"Controller switches detected for drone {controllers[0]}")
-            self.controller_switches[controllers[0]] = controllers[1]
+    def _on_show_upload(self, sender, parameters):
+        # Note: this gets called once for each drone
+        self.parameters[parameters[0]] = parameters[1]
+        if parameters[1] is not None:
+            self.log.warning(f"Controller switches detected for drone {parameters[0]}.")
 
     def _on_show_start(self, sender, *, nursery):
-        if len(self.controller_switches) > 0:
-            start_time = trio.current_time()
-            # save this so we can clear self.controller_switches and avoid 'leftover' switches from previous uploads.
-            # In other words, if we want to include controller switches, we must do a fresh upload before a show start
-            controller_switches = deepcopy(self.controller_switches)
-            self.controller_switches = {}
-            self.log.warning(f"Controller switches cleared!")
-            for uav_id in controller_switches.keys():
+        for uav_id, parameters in self.parameters.items():
+            if parameters is not None:
                 uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
-                controller_switches = [[start_time + controller_switch[0], controller_switch[1]] for controller_switch in controller_switches[uav_id]]
-                nursery.start_soon(self._perform_controller_switches, uav, controller_switches)
+                nursery.start_soon(self._send_parameters, uav, parameters)
         CAR_PORT = self.configuration.get("drone_port", 6000)+1
         SIM_PORT = CAR_PORT + 1
         for stream in self.streams[CAR_PORT]:
@@ -152,17 +139,13 @@ class aimotionlab(Extension):
             self.log.info("Starting Sim!")
             nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
-    async def _perform_controller_switches(self, uav: CrazyflieUAV, switches):
-        # TODO: rework sleeps
+    async def _send_parameters(self, uav: CrazyflieUAV, parameters):
+        start_time = trio.current_time()
         if uav.is_in_drone_show_mode:
-            for switch in switches:
-                switch_time = switch[0]
-                switch_controller = switch[1]
-                await sleep_until(switch_time)
-                if uav.is_running_show and uav._airborne:
-                    await uav.set_parameter("stabilizer.controller", switch_controller)
-        else:
-            return
+            for t, parameter, value in parameters:
+                await sleep_until(start_time + t)
+                self.log.info(f"set param {parameter} to {value} for drone {uav.id}")
+                await uav.set_parameter(parameter, value)
 
     def _on_motion_capture_frame_received(
             self,

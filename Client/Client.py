@@ -5,6 +5,9 @@ import trio
 from trio import sleep
 
 
+def param(name, value):
+    return f"CMDSTART_param_{name}={value}_EOF".encode()
+
 def cw() -> bytes:
     with open(f"cw_traj.json", 'r') as f:
         traj = f.read()
@@ -16,10 +19,17 @@ def ccw() -> bytes:
         traj = f.read()
     return f"CMDSTART_upload_{traj}_EOF".encode()
 
+def fig8() -> bytes:
+    with open(f"trajectory.json", 'r') as f:
+        traj = f.read()
+    return f"CMDSTART_upload_{traj}_EOF".encode()
 
-def start() -> bytes:
+
+def start_abs() -> bytes:
+    return f"CMDSTART_start_absolute_EOF".encode()
+
+def start_rel() -> bytes:
     return f"CMDSTART_start_relative_EOF".encode()
-
 
 def takeoff(h) -> bytes:
     return f"CMDSTART_takeoff_{h:.4f}_EOF".encode()
@@ -34,19 +44,32 @@ def hover() -> bytes:
 
 
 # list of commands to be dispatched, first a delay to be waited before the command, then the command to be sent
-demo_maneuvers = [(1, takeoff(0.3)),
-                  (3, cw()),
-                  (1, start()),
-                  (3, hover()),
-                  (2, cw()),
-                  (1, start()),
-                  (1, ccw()),
-                  (5, start()),
-                  (1, ccw()),
-                  (3, start()),
-                  (5, land())]
+# demo_maneuvers = [(1, takeoff(0.3)),
+#                   (3, cw()),
+#                   (1, start_rel()),
+#                   (3, hover()),
+#                   (1, param("stabilizer.controller", 2)),
+#                   (2, cw()),
+#                   (1, start_rel()),
+#                   (1, ccw()),
+#                   (5, start_rel()),
+#                   (1, param("stabilizer.controller", 1)),
+#                   (1, ccw()),
+#                   (3, start_rel()),
+#                   (5, land())]
+
+demo_maneuvers = [(3, fig8()),
+                  (3, start_abs()),
+                  (20, land()),
+                  (5, fig8()),
+                  (3, start_abs()),
+                  (20, land())]
 
 
+# demo_maneuvers = [(1, takeoff(0.3)),
+#                   (3, ccw()),
+#                   (5, start_rel()),
+#                   (20, land())]
 
 async def establish_connection_with_handler(drone_id: str):
     drone_stream: trio.SocketStream = await trio.open_tcp_stream("127.0.0.1", PORT)
