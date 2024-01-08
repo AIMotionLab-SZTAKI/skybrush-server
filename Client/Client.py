@@ -58,12 +58,18 @@ def hover() -> bytes:
 #                   (3, start_rel()),
 #                   (5, land())]
 
+# demo_maneuvers = [(3, fig8()),
+#                   (3, start_abs()),
+#                   (20, land()),
+#                   (5, fig8()),
+#                   (3, start_abs()),
+#                   (20, land())]
+
 demo_maneuvers = [(3, fig8()),
-                  (3, start_abs()),
-                  (20, land()),
-                  (5, fig8()),
-                  (3, start_abs()),
-                  (20, land())]
+                  (3, fig8()),
+                  (3, fig8()),
+                  (3, fig8()),
+                  (3, fig8())]
 
 
 # demo_maneuvers = [(1, takeoff(0.3)),
@@ -85,7 +91,7 @@ async def establish_connection_with_handler(drone_id: str):
         return None
 
 PORT = 6000
-drone = "09"
+drone = "07"
 
 async def demo():
     print("Welcome to a test demo!")
