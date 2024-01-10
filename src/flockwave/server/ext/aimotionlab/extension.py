@@ -123,7 +123,7 @@ class aimotionlab(Extension):
         # Note: this gets called once for each drone
         self.parameters[parameters[0]] = parameters[1]
         if parameters[1] is not None:
-            self.log.warning(f"Controller switches detected for drone {parameters[0]}.")
+            self.log.warning(f"Parameter switches detected for drone {parameters[0]}.")
 
     def _on_show_start(self, sender, *, nursery):
         for uav_id, parameters in self.parameters.items():
@@ -144,8 +144,11 @@ class aimotionlab(Extension):
         if uav.is_in_drone_show_mode:
             for t, parameter, value in parameters:
                 await sleep_until(start_time + t)
-                self.log.info(f"set param {parameter} to {value} for drone {uav.id}")
-                await uav.set_parameter(parameter, value)
+                try:
+                    await uav.set_parameter(parameter, value)
+                    self.log.info(f"set param {parameter} to {value} for drone {uav.id}")
+                except RuntimeError:
+                    self.log.warning(f"failed to set param {parameter} for drone {uav.id}")
 
     def _on_motion_capture_frame_received(
             self,
