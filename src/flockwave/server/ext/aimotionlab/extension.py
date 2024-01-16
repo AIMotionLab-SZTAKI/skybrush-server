@@ -123,7 +123,7 @@ class aimotionlab(Extension):
         # Note: this gets called once for each drone
         self.parameters[parameters[0]] = parameters[1]
         if parameters[1] is not None:
-            self.log.warning(f"Parameter switches detected for drone {parameters[0]}.")
+            self.log.warning(f"Parameter updates detected for drone {parameters[0]}.")
 
     def _on_show_start(self, sender, *, nursery):
         for uav_id, parameters in self.parameters.items():
@@ -140,13 +140,17 @@ class aimotionlab(Extension):
             nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
     async def _send_parameters(self, uav: CrazyflieUAV, parameters):
+        parameters = sorted(parameters, key=lambda x: x[0])
         start_time = trio.current_time()
         if uav.is_in_drone_show_mode:
             for t, parameter, value in parameters:
                 await sleep_until(start_time + t)
                 try:
                     await uav.set_parameter(parameter, value)
-                    self.log.info(f"set param {parameter} to {value} for drone {uav.id}")
+                    read_param = await uav.get_parameter(parameter, fetch=True)
+                    self.log.info(f"drone {uav.id} {parameter}: {read_param}")
+                    if abs(read_param - value) > 0.0001:
+                        self.log.warning(f"PARAMETER FOR DRONE {uav.id} WASN'T SET CORRECTLY")
                 except RuntimeError:
                     self.log.warning(f"failed to set param {parameter} for drone {uav.id}")
 
