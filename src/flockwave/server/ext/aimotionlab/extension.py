@@ -140,6 +140,7 @@ class aimotionlab(Extension):
             nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
     async def _send_parameters(self, uav: CrazyflieUAV, parameters):
+        # TODO: cancel this process if show is over or drone landed etc.
         parameters = sorted(parameters, key=lambda x: x[0])
         start_time = trio.current_time()
         if uav.is_in_drone_show_mode:

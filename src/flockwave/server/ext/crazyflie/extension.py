@@ -39,9 +39,7 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
 
     def _create_driver(self) -> CrazyflieDriver:
         assert self.app is not None
-        return CrazyflieDriver(
-            cache=Path(self.app.dirs.user_cache_dir) / "ext" / "crazyflie",
-        )
+        return CrazyflieDriver(cache=self.get_cache_dir())
 
     def configure_driver(
         self, driver: CrazyflieDriver, configuration: Dict[str, Any]
