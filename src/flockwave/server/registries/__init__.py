@@ -10,7 +10,6 @@ from .auth_methods import AuthenticationMethodRegistry
 from .base import Registry, RegistryBase, find_in_registry
 from .channels import ChannelTypeRegistry
 from .clients import ClientRegistry
-from .clocks import ClockRegistry
 from .connections import ConnectionRegistry, ConnectionRegistryEntry
 from .objects import ObjectRegistry
 from .uav_drivers import UAVDriverRegistry
@@ -22,7 +21,6 @@ __all__ = (
     "find_in_registry",
     "AuthenticationMethodRegistry",
     "ClientRegistry",
-    "ClockRegistry",
     "ConnectionRegistry",
     "ConnectionRegistryEntry",
     "ChannelTypeRegistry",
