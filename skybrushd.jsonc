@@ -49,9 +49,6 @@
       ],
       "enabled": true
     },
-    "lps": {
-      "enabled": true
-    },
     "motion_capture": {
       "enabled": true,
       "frame_rate": 30,
