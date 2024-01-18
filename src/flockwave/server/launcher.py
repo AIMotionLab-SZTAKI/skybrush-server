@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import trio
+import warnings
 
 from typing import Optional
 
@@ -74,6 +75,10 @@ def start(
     for logger_name in ("charset_normalizer", "httpcore", "httpx"):
         log_handler = logging.getLogger(logger_name)
         log_handler.setLevel(logging.WARN)
+
+        # Silence deprecation warnings from Trio if we are packaged until AnyIO
+        # migrates to to_thread.run_sync(..., abandon_on_cancel=...)
+        warnings.filterwarnings(action="ignore", category=trio.TrioDeprecationWarning)
 
     # Load environment variables from .env
     dotenv.load_dotenv(verbose=debug)
