@@ -2,68 +2,67 @@
 
 [[package]]
 name = "adrenaline"
-version = "1.1.0"
+version = "2.0.0"
 description = "Keep your OS from sleeping (supports Windows and macOS)"
 optional = false
-python-versions = ">=3.7,<4.0"
+python-versions = ">=3.8,<4.0"
 files = [
-    {file = "adrenaline-1.1.0-py3-none-any.whl", hash = "sha256:be3d4664a63d8a0e2fb1189bcfe87eb53652f89fd96a1fdfdf09e866fb9ea515"},
-    {file = "adrenaline-1.1.0.tar.gz", hash = "sha256:8d3b60aab8f1a3fc04052a4f92bd1883eeb5b7bb3e5b62895836e7ef6ab572ad"},
+    {file = "adrenaline-2.0.0-py3-none-any.whl", hash = "sha256:6f951a2c77ec836c80a049bcfa0d50dbb2baccef6637880de10d682b27948b50"},
+    {file = "adrenaline-2.0.0.tar.gz", hash = "sha256:b535e3d1e929a56d863ea278f5836c985991b38e8446254b0668a3e949b0f399"},
 ]
 
 [package.dependencies]
 jeepney = {version = ">=0.8.0,<0.9.0", markers = "sys_platform == \"linux\""}
 pyobjc-core = {version = ">=9.0.1,<10.0.0", markers = "sys_platform == \"darwin\""}
 pyobjc-framework-Cocoa = {version = ">=9.0.1,<10.0.0", markers = "sys_platform == \"darwin\""}
-setuptools = {version = ">=67,<68", markers = "sys_platform == \"darwin\""}
 
 [[package]]
 name = "aio-net-events"
-version = "5.0.1"
+version = "6.0.1"
 description = "Asynchronous network configuration event detector for Python 3.7 and above"
 optional = false
-python-versions = ">=3.7,<4.0"
+python-versions = ">=3.8,<4.0"
 files = [
-    {file = "aio_net_events-5.0.1-py3-none-any.whl", hash = "sha256:a4dcbf2bde6440f3a50fdaf404c17c123a9711e91e8872106c0dbca4fe4a863d"},
-    {file = "aio_net_events-5.0.1.tar.gz", hash = "sha256:95815d2fa0a9f7324589fd76f59e51125766a89d3e3412430f9f180163d0f5c3"},
+    {file = "aio_net_events-6.0.1-py3-none-any.whl", hash = "sha256:896b8ae89e478b9bbad5d99e2976677da8594481d2fb5b7179ced8f75ba371ac"},
+    {file = "aio_net_events-6.0.1.tar.gz", hash = "sha256:8432af4d8ab6cc577c6c40ee58f894b2979852b26dd46adc9dd54649b9496ac4"},
 ]
 
 [package.dependencies]
-anyio = ">=3.7.1,<4.0.0"
-netifaces-plus = ">=0.12.0"
+anyio = ">=3.7.1,<5"
+netifaces-plus = ">=0.12.1"
 pyobjc-core = {version = ">=9.2,<10.0", markers = "sys_platform == \"darwin\""}
 pyobjc-framework-Cocoa = {version = ">=9.2,<10.0", markers = "sys_platform == \"darwin\""}
 pyobjc-framework-SystemConfiguration = {version = ">=9.2,<10.0", markers = "sys_platform == \"darwin\""}
 
 [[package]]
 name = "aio-usb-hotplug"
-version = "5.2.0"
+version = "6.0.0"
 description = "Asynchronous generators yielding detected hotplug events on the USB buses"
 optional = false
-python-versions = ">=3.7,<4.0"
+python-versions = ">=3.8,<4.0"
 files = [
-    {file = "aio_usb_hotplug-5.2.0-py3-none-any.whl", hash = "sha256:77b5c3f89e87ac9e0396a05129be2af7f6aa73aaa9faa1eae5682cbb3aff904c"},
-    {file = "aio_usb_hotplug-5.2.0.tar.gz", hash = "sha256:e7da5d6f8efdc576b23d8f5582c836e60312e1426096aa87fbc78be2a993e9fc"},
+    {file = "aio_usb_hotplug-6.0.0-py3-none-any.whl", hash = "sha256:7fa402ea0e60ed0bebdc38cf61ee0d3095252544bed0c2489fbeb2851f7d0dea"},
+    {file = "aio_usb_hotplug-6.0.0.tar.gz", hash = "sha256:544e9e4289f9c34b71a49054c7b1744291b8f55a1681847aae89a062d95c0b1a"},
 ]
 
 [package.dependencies]
-anyio = ">=3.0.0,<4.0.0"
-pyudev = {version = ">=0.22.0", markers = "sys_platform == \"linux\""}
-pyusb = ">=1.1.0,<2.0.0"
+anyio = ">=3.7.1,<5"
+pyudev = {version = ">=0.24.1", markers = "sys_platform == \"linux\""}
+pyusb = ">=1.2.1,<2.0.0"
 
 [[package]]
 name = "aiocflib"
-version = "2.6.0"
+version = "3.0.0"
 description = "Python async API for Crazyflie drones"
 optional = false
-python-versions = ">=3.7,<4.0"
+python-versions = ">=3.8,<4.0"
 files = [
-    {file = "aiocflib-2.6.0-py3-none-any.whl", hash = "sha256:8ac0005317920283d1852ec36fae2885d965924d015f01d3d7f919564d4d899e"},
-    {file = "aiocflib-2.6.0.tar.gz", hash = "sha256:8ed2c2eba06afbd137279ca2aec9fc6846a994c82bd67e5e8ada1faafdb5245f"},
+    {file = "aiocflib-3.0.0-py3-none-any.whl", hash = "sha256:ce34c41443e4ef83513bffa816cf2f31c5f96d867861dae6b902ff05d26369ea"},
+    {file = "aiocflib-3.0.0.tar.gz", hash = "sha256:2fce4baf72c7d7271a54c61596db19f217f59975bc15376a3e7684eafe21db4f"},
 ]
 
 [package.dependencies]
-anyio = ">=3.2.1,<4.0.0"
+anyio = ">=3.2.1,<5"
 colorama = ">=0.4.3"
 colour = ">=0.1.5"
 hexdump = ">=3.3,<4.0"
@@ -649,23 +648,23 @@ reference = "fury"
 
 [[package]]
 name = "flockwave-conn"
-version = "6.2.1"
+version = "6.3.2"
 description = "Connection objects for various data sources"
 optional = false
-python-versions = ">=3.7,<4.0"
+python-versions = ">=3.9,<4.0"
 files = [
-    {file = "flockwave-conn-6.2.1.tar.gz", hash = "sha256:32547b0e397604907627b7ac687e4fb46db669f5be8da0b99e3940aca54d2644"},
-    {file = "flockwave_conn-6.2.1-py3-none-any.whl", hash = "sha256:9555df182282a36d8911c68bf8c68efe64b8db22386f36e07f8072d40f98ea24"},
+    {file = "flockwave-conn-6.3.2.tar.gz", hash = "sha256:5161a643fed337d91c6f38bf598098b78b8ed6db419aa20324b674d618906eec"},
+    {file = "flockwave_conn-6.3.2-py3-none-any.whl", hash = "sha256:bc7994f3830a7f0bee66324a61b949c2eb1aeb9f730655781fb53db21c8cb17f"},
 ]
 
 [package.dependencies]
 blinker = ">=1.4,<2.0"
 flockwave-async = ">=1.4.0,<2.0.0"
-flockwave-net = {version = ">=5.0.0,<6.0.0", extras = ["async"]}
+flockwave-net = {version = ">=6.0.1,<7.0.0", extras = ["async"]}
 flockwave-parsers = ">=2.0.0,<3.0.0"
 pyserial = {version = ">=3.5,<4.0", optional = true, markers = "extra == \"serial\""}
 tinyrpc = {version = ">=1.1.7,<2.0.0", extras = ["msgpack"], optional = true, markers = "extra == \"rpc\""}
-trio = ">=0.21.0"
+trio = ">=0.22.0"
 trio-util = ">=0.7.0"
 
 [package.extras]
@@ -782,22 +781,22 @@ reference = "fury"
 
 [[package]]
 name = "flockwave-net"
-version = "5.0.0"
+version = "6.0.1"
 description = "Networking related functions for apps based on the Flockwave framework"
 optional = false
-python-versions = ">=3.7,<4.0"
+python-versions = ">=3.9,<4.0"
 files = [
-    {file = "flockwave-net-5.0.0.tar.gz", hash = "sha256:b9288f22433c11ee5e9651a3f682814905c5a940703a046827d3d144bed58fc0"},
-    {file = "flockwave_net-5.0.0-py3-none-any.whl", hash = "sha256:cecb7ec389f1fa2b89825daf6e5f1e0c30eb846e8867603e453b61a0673414a2"},
+    {file = "flockwave-net-6.0.1.tar.gz", hash = "sha256:9a4fc6efbe8bb845268060962b1e15ebf82ed0f5984c957c28708082e6485fe7"},
+    {file = "flockwave_net-6.0.1-py3-none-any.whl", hash = "sha256:0a486ee543bb39c6709ef5059e65b63bdf192184077cbd323e3e677ad38c0021"},
 ]
 
 [package.dependencies]
-aio-net-events = {version = ">=5.0.0,<6.0.0", optional = true, markers = "extra == \"async\""}
-netifaces-plus = ">=0.11.0"
+aio-net-events = {version = ">=6.0.1,<7.0.0", optional = true, markers = "extra == \"async\""}
+netifaces-plus = ">=0.12.1"
 trio = {version = ">=0.19.0", optional = true, markers = "extra == \"async\""}
 
 [package.extras]
-async = ["aio-net-events (>=5.0.0,<6.0.0)", "trio (>=0.19.0)"]
+async = ["aio-net-events (>=6.0.1,<7.0.0)", "trio (>=0.19.0)"]
 
 [package.source]
 type = "legacy"
@@ -1482,13 +1481,13 @@ totp = ["cryptography"]
 
 [[package]]
 name = "pdoc"
-version = "12.3.1"
+version = "14.4.0"
 description = "API Documentation for Python Projects"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "pdoc-12.3.1-py3-none-any.whl", hash = "sha256:c3f24f31286e634de9c76fa6e67bd5c0c5e74360b41dc91e6b82499831eb52d8"},
-    {file = "pdoc-12.3.1.tar.gz", hash = "sha256:453236f225feddb8a9071428f1982a78d74b9b3da4bc4433aedb64dbd0cc87ab"},
+    {file = "pdoc-14.4.0-py3-none-any.whl", hash = "sha256:6ea4fe07620b1f7601e2708a307a257636ec206e20b5611640b30f2e3cab47d6"},
+    {file = "pdoc-14.4.0.tar.gz", hash = "sha256:c92edc425429ccbe287ace2a027953c24f13de53eab484c1a6d31ca72dd2fda9"},
 ]
 
 [package.dependencies]
@@ -1497,7 +1496,7 @@ MarkupSafe = "*"
 pygments = ">=2.12.0"
 
 [package.extras]
-dev = ["black", "hypothesis", "mypy", "pytest", "pytest-cov", "pytest-timeout", "ruff", "tox", "types-pygments"]
+dev = ["hypothesis", "mypy", "pdoc-pyo3-sample-library (==1.0.11)", "pygments (>=2.14.0)", "pytest", "pytest-cov", "pytest-timeout", "ruff", "tox", "types-pygments"]
 
 [[package]]
 name = "pluggy"
@@ -1552,19 +1551,20 @@ plugins = ["importlib-metadata"]
 
 [[package]]
 name = "pyjwt"
-version = "1.7.1"
+version = "2.8.0"
 description = "JSON Web Token implementation in Python"
 optional = false
-python-versions = "*"
+python-versions = ">=3.7"
 files = [
-    {file = "PyJWT-1.7.1-py2.py3-none-any.whl", hash = "sha256:5c6eca3c2940464d106b99ba83b00c6add741c9becaec087fb7ccdefea71350e"},
-    {file = "PyJWT-1.7.1.tar.gz", hash = "sha256:8d59a976fb773f3e6a39c85636357c4f0e242707394cadadd9814f5cbaa20e96"},
+    {file = "PyJWT-2.8.0-py3-none-any.whl", hash = "sha256:59127c392cc44c2da5bb3192169a91f429924e17aff6534d70fdc02ab3e04320"},
+    {file = "PyJWT-2.8.0.tar.gz", hash = "sha256:57e28d156e3d5c10088e0c68abb90bfac3df82b40a71bd0daa20c65ccd5c23de"},
 ]
 
 [package.extras]
-crypto = ["cryptography (>=1.4)"]
-flake8 = ["flake8", "flake8-import-order", "pep8-naming"]
-test = ["pytest (>=4.0.1,<5.0.0)", "pytest-cov (>=2.6.0,<3.0.0)", "pytest-runner (>=4.2,<5.0.0)"]
+crypto = ["cryptography (>=3.4.0)"]
+dev = ["coverage[toml] (==5.0.4)", "cryptography (>=3.4.0)", "pre-commit", "pytest (>=6.0.0,<7.0.0)", "sphinx (>=4.5.0,<5.0.0)", "sphinx-rtd-theme", "zope.interface"]
+docs = ["sphinx (>=4.5.0,<5.0.0)", "sphinx-rtd-theme", "zope.interface"]
+tests = ["coverage[toml] (==5.0.4)", "pytest (>=6.0.0,<7.0.0)"]
 
 [[package]]
 name = "pyledctrl"
@@ -1910,22 +1910,28 @@ dotenv = ["python-dotenv"]
 
 [[package]]
 name = "quart-trio"
-version = "0.10.0"
+version = "0.10.0.9000"
 description = "A Quart extension to provide trio support"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "quart-trio-0.10.0.tar.gz", hash = "sha256:66d4a2f8c3c417741d0e9709e0270edcedfdc26a9daac9e348b374f51c6decf8"},
-    {file = "quart_trio-0.10.0-py3-none-any.whl", hash = "sha256:e22759a5e237f47dfff10a8dad3064d1cb11515c6550bf00f988695a068f7249"},
+    {file = "quart-trio-0.10.0.9000.tar.gz", hash = "sha256:f68e89649c9d9e35b85635f752546ab1f2f1e7fcfa3d1114758e0a71c614b152"},
+    {file = "quart_trio-0.10.0.9000-py3-none-any.whl", hash = "sha256:2d7f3602301a8e0ceda25c738595bef14f4c3485f56907319ada05e1df5e41ef"},
 ]
 
 [package.dependencies]
+exceptiongroup = ">=1.0.0"
 hypercorn = {version = ">=0.12.0", extras = ["trio"]}
 quart = ">=0.18"
-trio = ">=0.9.0"
+trio = ">=0.19.0"
 
 [package.extras]
 docs = ["pydata_sphinx_theme"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.fury.io/skybrush"
+reference = "fury"
 
 [[package]]
 name = "scipy"
@@ -1978,22 +1984,6 @@ files = [
 
 [package.dependencies]
 paramiko = "*"
-
-[[package]]
-name = "setuptools"
-version = "67.8.0"
-description = "Easily download, build, install, upgrade, and uninstall Python packages"
-optional = false
-python-versions = ">=3.7"
-files = [
-    {file = "setuptools-67.8.0-py3-none-any.whl", hash = "sha256:5df61bf30bb10c6f756eb19e7c9f3b473051f48db77fddbe06ff2ca307df9a6f"},
-    {file = "setuptools-67.8.0.tar.gz", hash = "sha256:62642358adc77ffa87233bc4d2354c4b2682d214048f500964dbe760ccedf102"},
-]
-
-[package.extras]
-docs = ["furo", "jaraco.packaging (>=9)", "jaraco.tidelift (>=1.4)", "pygments-github-lexers (==0.0.5)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-favicon", "sphinx-hoverxref (<2)", "sphinx-inline-tabs", "sphinx-lint", "sphinx-notfound-page (==0.8.3)", "sphinx-reredirects", "sphinxcontrib-towncrier"]
-testing = ["build[virtualenv]", "filelock (>=3.4.0)", "flake8-2020", "ini2toml[lite] (>=0.9)", "jaraco.envs (>=2.2)", "jaraco.path (>=3.2.0)", "pip (>=19.1)", "pip-run (>=8.8)", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=1.3)", "pytest-mypy (>=0.9.1)", "pytest-perf", "pytest-ruff", "pytest-timeout", "pytest-xdist", "tomli-w (>=1.0.0)", "virtualenv (>=13.0.0)", "wheel"]
-testing-integration = ["build[virtualenv]", "filelock (>=3.4.0)", "jaraco.envs (>=2.2)", "jaraco.path (>=3.2.0)", "pytest", "pytest-enabler", "pytest-xdist", "tomli", "virtualenv (>=13.0.0)", "wheel"]
 
 [[package]]
 name = "six"
@@ -2195,19 +2185,20 @@ files = [
 
 [[package]]
 name = "trio"
-version = "0.21.0"
+version = "0.22.0"
 description = "A friendly Python library for async concurrency and I/O"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "trio-0.21.0-py3-none-any.whl", hash = "sha256:4dc0bf9d5cc78767fc4516325b6d80cc0968705a31d0eec2ecd7cdda466265b0"},
-    {file = "trio-0.21.0.tar.gz", hash = "sha256:523f39b7b69eef73501cebfe1aafd400a9aad5b03543a0eded52952488ff1c13"},
+    {file = "trio-0.22.0-py3-none-any.whl", hash = "sha256:f1dd0780a89bfc880c7c7994519cb53f62aacb2c25ff487001c0052bd721cdf0"},
+    {file = "trio-0.22.0.tar.gz", hash = "sha256:ce68f1c5400a47b137c5a4de72c7c901bd4e7a24fbdebfe9b41de8c6c04eaacf"},
 ]
 
 [package.dependencies]
 async-generator = ">=1.9"
 attrs = ">=19.2.0"
 cffi = {version = ">=1.14", markers = "os_name == \"nt\" and implementation_name != \"pypy\""}
+exceptiongroup = {version = ">=1.0.0rc9", markers = "python_version < \"3.11\""}
 idna = "*"
 outcome = "*"
 sniffio = "*"
@@ -2382,4 +2373,4 @@ pro = ["skybrush-ext-map-cache", "skybrush-ext-sidekick", "skybrush-ext-timecode
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "fdd7c17a3238bb47cd4199dbe4b8429f05f9ead54d7d04ef9f67ad7bc86dafe4"
+content-hash = "63e09422f942caf8bcbe61a141f460a6396859d6715056baec164b7b9fd13739"
