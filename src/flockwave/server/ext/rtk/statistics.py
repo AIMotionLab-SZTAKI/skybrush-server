@@ -109,8 +109,7 @@ class AntennaInformation:
         position = getattr(packet, "position", None)
         if position is not None:
             self.position = _ecef_to_gps.to_gps(position)
-            self.position_ecef = position * 1000  # [m] -> [mm]
-            self.position_ecef.round(0)
+            self.position_ecef = position
             self._antenna_position_timestamp = monotonic()
 
     def _forget_old_antenna_position_if_needed(self) -> None:
@@ -125,6 +124,9 @@ class AntennaInformation:
 
 @dataclass
 class MessageObservations:
+    """Simple data class holding statistical information about different
+    RTK messages broadcast by an RTK base."""
+
     entries: Deque[Tuple[float, float]] = field(default_factory=deque)
 
     _last_observed_at: float = field(default_factory=monotonic)
@@ -176,6 +178,9 @@ class MessageObservations:
 
 @dataclass
 class SatelliteCNRs:
+    """Simple data class holding satellite carrier-to-noise values
+    in decibels (dB)."""
+
     entries: Dict[str, float] = field(default_factory=dict)
     _timestamps: LastUpdatedOrderedDict[str, float] = field(
         default_factory=LastUpdatedOrderedDict
@@ -255,7 +260,7 @@ class SurveyStatusFlag(IntFlag):
     #: Indicates that the survey status is supported on the GPS receiver
     SUPPORTED = 1
 
-    #: Indicates that the GPS receiver is Surveyg its own position
+    #: Indicates that the GPS receiver is Surveying its own position
     ACTIVE = 2
 
     #: Indicates that the GPS receiver has a valid estimate of its own position
@@ -267,7 +272,7 @@ class SurveyStatus:
     """Object that stores the status of the current survey procedure."""
 
     #: Stores the estimated accuracy of the surveyed position, in meters; valid
-    #: only if the "known" flag is set
+    #: only if the "valid" flag is set
     accuracy: float = 0.0
 
     #: Status flags
