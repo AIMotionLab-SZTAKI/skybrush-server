@@ -44,19 +44,19 @@ def hover() -> bytes:
 
 
 # list of commands to be dispatched, first a delay to be waited before the command, then the command to be sent
-# demo_maneuvers = [(1, takeoff(0.3)),
-#                   (3, cw()),
-#                   (1, start_rel()),
-#                   (3, hover()),
-#                   (1, param("stabilizer.controller", 2)),
-#                   (2, cw()),
-#                   (1, start_rel()),
-#                   (1, ccw()),
-#                   (5, start_rel()),
-#                   (1, param("stabilizer.controller", 1)),
-#                   (1, ccw()),
-#                   (3, start_rel()),
-#                   (5, land())]
+demo_maneuvers = [(1, takeoff(0.3)),
+                  (3, cw()),
+                  (1, start_rel()),
+                  (3, hover()),
+                  (1, param("stabilizer.controller", 2)),
+                  (2, cw()),
+                  (1, start_rel()),
+                  (1, ccw()),
+                  (5, start_rel()),
+                  (1, param("stabilizer.controller", 1)),
+                  (1, ccw()),
+                  (3, start_rel()),
+                  (5, land())]
 
 # demo_maneuvers = [(3, fig8()),
 #                   (3, start_abs()),
@@ -65,11 +65,11 @@ def hover() -> bytes:
 #                   (3, start_abs()),
 #                   (20, land())]
 
-demo_maneuvers = [(3, fig8()),
-                  (3, fig8()),
-                  (3, fig8()),
-                  (3, fig8()),
-                  (3, fig8())]
+# demo_maneuvers = [(3, fig8()),
+#                   (3, fig8()),
+#                   (3, fig8()),
+#                   (3, fig8()),
+#                   (3, fig8())]
 
 
 # demo_maneuvers = [(1, takeoff(0.3)),
@@ -91,7 +91,7 @@ async def establish_connection_with_handler(drone_id: str):
         return None
 
 PORT = 6000
-drone = "07"
+drone = "08"
 
 async def demo():
     print("Welcome to a test demo!")
