@@ -2508,4 +2508,4 @@ pro = ["skybrush-ext-map-cache", "skybrush-ext-sidekick", "skybrush-ext-timecode
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "2a87b9efc04b4a624214806279ecb683a6f6c46b5e4a5c3c208815a556444f12"
+content-hash = "a5ca86b4f8bb9bc522540a2345105d2303e333c080fb2c07718f069a413106d0"
