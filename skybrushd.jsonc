@@ -6,6 +6,7 @@
         "crazyradio://1/90/1M/E7E7E7E7"
       ],
       "enabled": true
+      // "controller": "mellinger" this is how we would give a preferred controller for a show :)
     },
     "aimotionlab": {
       "channel": 1,
@@ -65,10 +66,6 @@
           {
             "type": "strip_prefix",
             "value": "RC_car_"
-          },
-          {
-            "type": "strip_prefix",
-            "value": "AI_car_"
           },
           {
             "type": "strip_prefix",

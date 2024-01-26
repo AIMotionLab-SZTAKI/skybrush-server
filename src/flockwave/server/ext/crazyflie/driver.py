@@ -1221,24 +1221,6 @@ class CrazyflieUAV(UAVBase):
         session = self._crazyflie.log.create_session()
         session.configure(graceful_cleanup=True)
 
-        # session.create_block(
-        #     "gyro.z",
-        #     "acc.x",
-        #     "acc.y",
-        #     "acc.z",
-        #     period=0.2,
-        #     handler=self._print_log,
-        # )
-        # return session
-        #
-        # session.create_block(
-        #     "ctrlGeom.cmd_pitch",
-        #     "Lqr.cmd_pitch",
-        #     period=0.2,
-        #     handler=self._print_log,
-        # )
-        # return session
-        # return session
         return session
         session.create_block(
             # "load_pose.qx",
