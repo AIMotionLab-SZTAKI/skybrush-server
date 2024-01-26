@@ -600,6 +600,29 @@ files = [
 test = ["pytest (>=6)"]
 
 [[package]]
+name = "flask"
+version = "3.0.1"
+description = "A simple framework for building complex web applications."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "flask-3.0.1-py3-none-any.whl", hash = "sha256:ca631a507f6dfe6c278ae20112cea3ff54ff2216390bf8880f6b035a5354af13"},
+    {file = "flask-3.0.1.tar.gz", hash = "sha256:6489f51bb3666def6f314e15f19d50a1869a19ae0e8c9a3641ffe66c77d42403"},
+]
+
+[package.dependencies]
+blinker = ">=1.6.2"
+click = ">=8.1.3"
+importlib-metadata = {version = ">=3.6.0", markers = "python_version < \"3.10\""}
+itsdangerous = ">=2.1.2"
+Jinja2 = ">=3.1.2"
+Werkzeug = ">=3.0.0"
+
+[package.extras]
+async = ["asgiref (>=3.2)"]
+dotenv = ["python-dotenv"]
+
+[[package]]
 name = "flockwave-app-framework"
 version = "2.6.0"
 description = "Generic app framework for CLI based apps in the Skybrush suite"
@@ -1884,25 +1907,27 @@ files = [
 
 [[package]]
 name = "quart"
-version = "0.18.3"
+version = "0.19.4"
 description = "A Python ASGI web microframework with the same API as Flask"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "Quart-0.18.3-py3-none-any.whl", hash = "sha256:c221a7deb83a014dee040108d654b6141fe37f59e249c5caa0fdcf6506caf50b"},
-    {file = "Quart-0.18.3.tar.gz", hash = "sha256:dc4de597d5d4693627c90904b233d729531f6b27c1164f760476d3967aee2a4a"},
+    {file = "quart-0.19.4-py3-none-any.whl", hash = "sha256:959da9371b44b6f48d952661863f8f64e68a893481ef3f2ef45b177629dc0928"},
+    {file = "quart-0.19.4.tar.gz", hash = "sha256:22ff186cf164955a7bf7483ff42a739a9fad3b119041846b15dc9597ec74c85c"},
 ]
 
 [package.dependencies]
 aiofiles = "*"
-blinker = "*"
+blinker = ">=1.6"
 click = ">=8.0.0"
+flask = ">=3.0.0"
 hypercorn = ">=0.11.2"
 importlib_metadata = {version = "*", markers = "python_version < \"3.10\""}
 itsdangerous = "*"
 jinja2 = "*"
 markupsafe = "*"
-werkzeug = ">=2.2.0"
+typing_extensions = {version = "*", markers = "python_version < \"3.10\""}
+werkzeug = ">=3.0.0"
 
 [package.extras]
 docs = ["pydata_sphinx_theme"]
@@ -1910,28 +1935,23 @@ dotenv = ["python-dotenv"]
 
 [[package]]
 name = "quart-trio"
-version = "0.10.0.9000"
+version = "0.11.1"
 description = "A Quart extension to provide trio support"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "quart-trio-0.10.0.9000.tar.gz", hash = "sha256:f68e89649c9d9e35b85635f752546ab1f2f1e7fcfa3d1114758e0a71c614b152"},
-    {file = "quart_trio-0.10.0.9000-py3-none-any.whl", hash = "sha256:2d7f3602301a8e0ceda25c738595bef14f4c3485f56907319ada05e1df5e41ef"},
+    {file = "quart_trio-0.11.1-py3-none-any.whl", hash = "sha256:d4da1ab7699e44357f7788e1b5a30158680e999cf6b8e9ee762ce22164218bc0"},
+    {file = "quart_trio-0.11.1.tar.gz", hash = "sha256:149c9c65c2faafdf455a4461b600e1983b71e593b6f8c8b91b592bbda36cea98"},
 ]
 
 [package.dependencies]
 exceptiongroup = ">=1.0.0"
 hypercorn = {version = ">=0.12.0", extras = ["trio"]}
-quart = ">=0.18"
+quart = ">=0.19"
 trio = ">=0.19.0"
 
 [package.extras]
 docs = ["pydata_sphinx_theme"]
-
-[package.source]
-type = "legacy"
-url = "https://pypi.fury.io/skybrush"
-reference = "fury"
 
 [[package]]
 name = "scipy"
@@ -2241,14 +2261,25 @@ async-generator = "*"
 trio = ">=0.11.0"
 
 [[package]]
+name = "typing-extensions"
+version = "4.9.0"
+description = "Backported and Experimental Type Hints for Python 3.8+"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "typing_extensions-4.9.0-py3-none-any.whl", hash = "sha256:af72aea155e91adfc61c3ae9e0e342dbc0cba726d6cba4b6c72c1f34e47291cd"},
+    {file = "typing_extensions-4.9.0.tar.gz", hash = "sha256:23478f88c37f27d76ac8aee6c905017a143b0b1b886c3c9f66bc2fd94f9f5783"},
+]
+
+[[package]]
 name = "werkzeug"
-version = "2.3.4"
+version = "3.0.1"
 description = "The comprehensive WSGI web application library."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "Werkzeug-2.3.4-py3-none-any.whl", hash = "sha256:48e5e61472fee0ddee27ebad085614ebedb7af41e88f687aaf881afb723a162f"},
-    {file = "Werkzeug-2.3.4.tar.gz", hash = "sha256:1d5a58e0377d1fe39d061a5de4469e414e78ccb1e1e59c0f5ad6fa1c36c52b76"},
+    {file = "werkzeug-3.0.1-py3-none-any.whl", hash = "sha256:90a285dc0e42ad56b34e696398b8122ee4c681833fb35b8334a095d82c56da10"},
+    {file = "werkzeug-3.0.1.tar.gz", hash = "sha256:507e811ecea72b18a404947aded4b3390e1db8f826b494d76550ef45bb3b1dcc"},
 ]
 
 [package.dependencies]
@@ -2373,4 +2404,4 @@ pro = ["skybrush-ext-map-cache", "skybrush-ext-sidekick", "skybrush-ext-timecode
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "4827b2f65341874b7c2f5f42b2478b17dbae093f4762c8b260b8919c643062c3"
+content-hash = "68b93a892377ee3c75f440058670ecc618c84792be4e850b086251d2f12e834c"
