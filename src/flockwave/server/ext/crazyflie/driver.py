@@ -1010,7 +1010,7 @@ class CrazyflieUAV(UAVBase):
         )
 
     async def takeoff(
-        self, altitude: float = 1.0, relative: bool = False, velocity: float = 0.5
+        self, altitude: float = 1.0, relative: bool = False, velocity: float = 0.2
     ):
         """Initiates a takeoff to the given altitude (absolute or relative).
 
@@ -1224,13 +1224,15 @@ class CrazyflieUAV(UAVBase):
 
         return session
         session.create_block(
-            # "load_pose.qx",
+            "Lqr.ex",
+            "Lqr.ey",
+            "Lqr.ez",
             # "controller.ctr_roll",
             # "controller.ctr_pitch",
             # "controller.ctr_yaw",
             # "controller.ctr_thrust",
             # "ctrlLqr1Dof.cmd_pitch",
-            period=0.2,
+            period=0.1,
             handler=self._print_log,
         )
         return session

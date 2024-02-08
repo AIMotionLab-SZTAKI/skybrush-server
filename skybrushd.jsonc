@@ -52,7 +52,7 @@
     },
     "motion_capture": {
       "enabled": true,
-      "frame_rate": 25,
+      "frame_rate": 35,
       "mapping": {
         "rules": [
           {

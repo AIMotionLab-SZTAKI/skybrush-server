@@ -33,7 +33,7 @@ EXTENSIONS = {
         "enabled": False,
         "fence": {"enabled": True, "distance": 1, "action": "none"},
         "status_interval": 0.5,  # number of seconds between consecutive status reports from a drone
-        "takeoff_altitude": 1,
+        "takeoff_altitude": 0.3,
         "testing": False,
     },
     "debug": {
