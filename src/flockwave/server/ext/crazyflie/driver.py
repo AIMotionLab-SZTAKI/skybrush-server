@@ -1367,7 +1367,7 @@ class CrazyflieUAV(UAVBase):
         print(f"trajectory type: {traj_type}")
         if traj_type == "POLY4D":
             data = encode_trajectory(trajectory, encoding=TrajectoryEncoding.POLY4D)
-            print(f"length of data without checksum: {len(data)}, {len(trajectory._data.get('points'))-1} segments")
+            print(f"{self.id}: length of data without checksum: {len(data)}, {len(trajectory._data.get('points'))-1} segments")
             addr = await write_with_checksum(
                 trajectory_memory, 0, data, only_if_changed=True
             )
@@ -1399,7 +1399,7 @@ class CrazyflieUAV(UAVBase):
                 file.write('\n')
                 file.write(breakpoints)
             print(f"saved traj.txt for debugging!")"""
-            print(f"length of data without checksum: {len(data)}")
+            print(f"{self.id}: length of data without checksum: {len(data)}")
             addr = await write_with_checksum(
                 trajectory_memory, 0, data, only_if_changed=True
             )

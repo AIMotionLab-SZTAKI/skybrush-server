@@ -22,7 +22,7 @@ __all__ = ("aimotionlab", )
 
 
 class aimotionlab(Extension):
-    """Extension that broadcasts the pose of non-UAV objects to the Crazyflie drones."""
+    """Extension that encapsulates all extra functions required by aimotionlab."""
     drone_handlers: List[DroneHandler]
     car_start: Optional[trio.Event]
 
@@ -30,7 +30,14 @@ class aimotionlab(Extension):
         super().__init__()
         self.drone_handlers = []
         self.configuration = None
+        # In parameters, the keys are strings for crazyflies, and the values are lists for each parameter that
+        # needs to be set at a certain show time for that drone. An element of this list therefore constist of
+        # a show time, a parameter designator and a value, in that order. e.g.: [..[10.0, "stabilizer.controller", 1]..]
         self.parameters: Dict[str, List[List[Union[float, str, int]]]] = {}
+        # In order to differentiate between drones, and between messages sent by drone handlers and the other
+        # server components, we give colors to drone handlers. These colors are selected from the dictionary below,
+        # meaning that if we put skybrush firmware on a new drone, we should add it to the dictionary (meaning we
+        # designate a color for it.
         self.colors = {"04": "\033[92m",
                        "06": "\033[93m",
                        "07": "\033[94m",
@@ -38,8 +45,14 @@ class aimotionlab(Extension):
                        "09": "\033[95m"}
         self.streams: Dict[int, List[trio.SocketStream]] = {}  # a dictionary for the tcp ports where we broadcast
         self.port_features: Dict[int, Callable] = {}  # a dictionary of what functions we should use for each tcp port
-        self.parameter_scope = trio.CancelScope()
-        self.get_show_clock: Optional[Callable] = None
+        self.get_show_clock: Optional[Callable] = None  # TODO: comment
+        # Using the signals extension, we subscribe to the "show:clock_changed" event, and call _on_show_clock_changed,
+        # which dispatches an instance of _send_parameters_to_drone for each drone in self.parameters. If we catch
+        # another of these signals, then each process instance of _send_parameters_to_drone should be cancelled, and
+        # restarted with the new values in self.parameters. To achieve this, we use cancel scopes, and run the processes
+        # in them. A cancel scope can then be cancelled in _on_show_clock_changed. This dictionary below stores the
+        # cancel scopes, much like self.parameters stores the parameters.
+        self.parameter_scopes: Dict[str, trio.CancelScope()] = {}
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -129,6 +142,7 @@ class aimotionlab(Extension):
             self.log.info(f"cf{cf_id} found.")
             self.streams[tcp_port].append(stream)
 
+            # FOR TESTING:
             # await sleep(2)
             # await stream.send_all(b'START')
 
@@ -168,33 +182,45 @@ class aimotionlab(Extension):
         self.log.info(f"Number of connections on port {port} changed to {len(self.streams[port])}")
 
     async def _send_parameters_to_drone(self, uav: CrazyflieUAV, parameters):
+        """This function dispatches the parameters listed in the self.parameters dictionary to the uav in the dictionary
+        whose key is taken here as a parameter."""
         # TODO: cancel this process if show is over or drone landed etc.
         parameters = sorted(parameters, key=lambda x: x[0])  # arrange parameters by time
         assert self.get_show_clock is not None
         clock: ShowClock = self.get_show_clock()  # grab the show clock: we send parameters out as per this clock
         assert clock is not None
-        with self.parameter_scope:
+        with self.parameter_scopes[uav.id]:
             for t, parameter, value in parameters:
+                # edge_triggered=False -> level triggered, meaning that if the clock is over the given time, the wait
+                # returns immediately, i.e. we can set a time such as -1000 and it will execute at once
                 await wait_until(clock, seconds=t, edge_triggered=False)
                 try:  # maybe for parameters after 0, they must only be sent if show is on?
                     self.log.info(f"SHOW {clock.seconds:.2f}: setting drone {uav.id} {parameter}: {value} at t:{t:.2f}")
                     await uav.set_parameter(parameter, value)
+                    # after setting the parameter, read it back, and if the difference is big, the set wasn't done!
                     read_param = await uav.get_parameter(parameter, fetch=True)
                     # self.log.info(f"drone {uav.id} {parameter}: {read_param}")
                     if abs(read_param - value) > 0.0001:
                         self.log.warning(f"PARAMETER FOR DRONE {uav.id} WASN'T SET CORRECTLY")
+                        raise RuntimeError
                 except RuntimeError:
                     self.log.warning(f"failed to set param {parameter} for drone {uav.id}")
 
     def _on_show_clock_changed(self, sender, *, nursery):
+        """This function gets called when the "show:clock_changed" event is called."""
         self.log.info(f"Show clock changed")
-        self.parameter_scope.cancel()  # this cancels previous instances
-        self.parameter_scope = trio.CancelScope()  # and then supplies the new scope
+        # self.parameter_scopes is a dictionary, keys are cf ids, values are Trio.CancelScope
+        for parameter_scope in self.parameter_scopes.values():
+            parameter_scope.cancel()  # cancel each instance of _send_parameters_to_drone
+        self.parameter_scopes = {}  # clear the parameter scopes
+        for uav_id in self.parameters.keys():  # for the drones that require parameter switches:
+            self.parameter_scopes[uav_id] = trio.CancelScope()  # make a cancelscope for each
         # TODO: Test with multiple drones and multiple parameters
         for uav_id, parameters in self.parameters.items():
             if parameters is not None:
                 try:
                     uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
+                    # Note: the parameter scopes aren't given as parameters to the function, but they could be :)
                     nursery.start_soon(self._send_parameters_to_drone, uav, parameters)
                 except KeyError:
                     self.log.warning(f"UAV by ID {uav_id} is not found in the client registry.")
