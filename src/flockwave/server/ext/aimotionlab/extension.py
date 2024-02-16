@@ -15,7 +15,7 @@ from flockwave.server.ext.show.clock import ShowClock
 from flockwave.server.tasks import wait_until
 from copy import deepcopy
 from errno import ENODATA
-import pickle  # include in pyproject.toml !
+import pickle
 from struct import Struct
 
 __all__ = ("aimotionlab", )
@@ -158,12 +158,13 @@ class aimotionlab(Extension):
                         break
                 except trio.BrokenResourceError:
                     break
+            self.streams[tcp_port].remove(stream)
         except KeyError:
             self.log.warning(f"UAV by ID {cf_id} is not found in the client registry.")
         except RuntimeError as e:
             self.log.warning(f"{e!r}")
-        self.streams[tcp_port].remove(stream)
-        self.log.info(f"Client disconnected from LQR port.")
+
+        self.log.info(f"[{self.get_show_clock().seconds:.2f}]: Client disconnected from LQR port.")
 
     async def _broadcast(self, stream: trio.SocketStream, *, port: int):
         self.streams[port].append(stream)
