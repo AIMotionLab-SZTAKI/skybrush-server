@@ -266,6 +266,7 @@ class TrajectorySpecification:
         return bbox.get_corners()  # type: ignore
 
     def iter_segments(self, max_length: float = inf) -> Iterable[TrajectorySegment]:
+        # TODO: Maybe incorporate absolute= argument like in 639c45f?
         points = self._data.get("points")
         if not points:
             return

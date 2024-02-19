@@ -1,3 +1,5 @@
+import struct
+
 import trio
 from flockwave.ext.base import Configuration
 from trio import sleep, sleep_until
@@ -8,6 +10,7 @@ from contextlib import ExitStack
 from functools import partial
 from flockwave.server.ext.motion_capture import MotionCaptureFrame
 from aiocflib.crazyflie import Crazyflie
+from aiocflib.crazyflie.log import LogMessage, LogSession
 from .frame_handler import AiMotionMocapFrameHandler
 from .drone_handler import DroneHandler
 from typing import Dict, Callable, Union, Tuple, Any, List, Optional
@@ -53,6 +56,9 @@ class aimotionlab(Extension):
         # in them. A cancel scope can then be cancelled in _on_show_clock_changed. This dictionary below stores the
         # cancel scopes, much like self.parameters stores the parameters.
         self.parameter_scopes: Dict[str, trio.CancelScope()] = {}
+
+        self.nursery: Optional[trio.Nursery] = None
+        self._log_session: Optional[LogSession] = None
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -109,6 +115,7 @@ class aimotionlab(Extension):
             frame_handler = AiMotionMocapFrameHandler(broadcast, configuration.get("cf_port", 1), configuration.get("channel"))
             # subscribe to the motion capture frame signal
             async with trio.open_nursery() as nursery:
+                self.nursery = nursery
                 stack.enter_context(
                     signals.use(
                         {
@@ -130,6 +137,13 @@ class aimotionlab(Extension):
                 )
                 for port, func in self.port_features.items():
                     nursery.start_soon(partial(trio.serve_tcp, handler=func, port=port, handler_nursery=nursery))
+            self.nursery = None
+
+    def _send_time_to_client(self, message: LogMessage, stream: trio.SocketStream):
+        self.log.info(f"message.items: {message.items}, type {type(message.items[0])}")
+        t = struct.pack('i', message.items[0])
+        if self.nursery is not None:
+            self.nursery.start_soon(stream.send_all, bytes(t))
 
     async def stream_to_cf(self, stream: trio.SocketStream, *, tcp_port: int):
         """ function we use to continously stream LQR parameters to the drone"""
@@ -142,23 +156,34 @@ class aimotionlab(Extension):
             self.log.info(f"cf{cf_id} found.")
             self.streams[tcp_port].append(stream)
 
-            # FOR TESTING:
-            # await sleep(2)
-            # await stream.send_all(b'START')
+            self._log_session = cf.log.create_session()
+            print(f"tried creating log session: {self._log_session}")
+            self._log_session.configure(graceful_cleanup=True)
+            self._log_session.create_block(
+                "Lqr.traj_timestamp",
+                period=1,
+                handler=partial(self._send_time_to_client, stream=stream),  # handler runs in the same nursery as this
+            )
+            async with self._log_session:
+                self.nursery.start_soon(self._log_session.process_messages)
 
-            while True:
-                try:
-                    msg = await stream.receive_some()
-                    if msg:
-                        port, channel, data = pickle.loads(msg)
-                        # self.log.info(f"LQR: port {port} | channel {channel} | data {data}")
-                        packet = Struct("<BIffffff").pack(*data)
-                        await cf.send_packet(port=port, channel=channel, data=packet)
-                    else:
+                # FOR TESTING:
+                await sleep(2)
+                await stream.send_all(b'START')
+
+                while True:
+                    try:
+                        msg = await stream.receive_some()
+                        if msg:
+                            port, channel, data = pickle.loads(msg)
+                            # self.log.info(f"LQR: port {port} | channel {channel} | data {data}")
+                            packet = Struct("<BIffffff").pack(*data)
+                            # await cf.send_packet(port=port, channel=channel, data=packet)
+                        else:
+                            break
+                    except trio.BrokenResourceError:
                         break
-                except trio.BrokenResourceError:
-                    break
-            self.streams[tcp_port].remove(stream)
+                self.streams[tcp_port].remove(stream)
         except KeyError:
             self.log.warning(f"UAV by ID {cf_id} is not found in the client registry.")
         except RuntimeError as e:

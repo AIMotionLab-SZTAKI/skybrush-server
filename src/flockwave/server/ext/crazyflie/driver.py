@@ -1224,15 +1224,13 @@ class CrazyflieUAV(UAVBase):
 
         return session
         session.create_block(
-            "Lqr.ex",
-            "Lqr.ey",
-            "Lqr.ez",
+            "Lqr.traj_timestamp",
             # "controller.ctr_roll",
             # "controller.ctr_pitch",
             # "controller.ctr_yaw",
             # "controller.ctr_thrust",
             # "ctrlLqr1Dof.cmd_pitch",
-            period=0.1,
+            period=1,
             handler=self._print_log,
         )
         return session
