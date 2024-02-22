@@ -18,7 +18,6 @@ from flockwave.server.ext.show.clock import ShowClock
 from flockwave.server.tasks import wait_until
 from copy import deepcopy
 from errno import ENODATA
-import pickle
 from struct import Struct
 
 __all__ = ("aimotionlab", )
@@ -59,6 +58,7 @@ class aimotionlab(Extension):
 
         self.nursery: Optional[trio.Nursery] = None
         self._log_session: Optional[LogSession] = None
+        self.cf_log: Optional[Any] = None
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -121,17 +121,11 @@ class aimotionlab(Extension):
                         {
                             "motion_capture:frame": partial(
                                 self._on_motion_capture_frame_received,
-                                handler=frame_handler,
-                                nursery=nursery
+                                handler=frame_handler
                             ),
                             "show:upload": self._on_show_upload,
-                            "show:start": partial(
-                                self._on_show_start,
-                                nursery=nursery),
-                            "show:clock_changed": partial(
-                                self._on_show_clock_changed,
-                                nursery=nursery
-                            )
+                            "show:start": self._on_show_start,
+                            "show:clock_changed": self._on_show_clock_changed
                         }
                     )
                 )
@@ -139,56 +133,81 @@ class aimotionlab(Extension):
                     nursery.start_soon(partial(trio.serve_tcp, handler=func, port=port, handler_nursery=nursery))
             self.nursery = None
 
-    def _send_time_to_client(self, message: LogMessage, stream: trio.SocketStream):
-        self.log.info(f"message.items: {message.items}, type {type(message.items[0])}")
-        t = struct.pack('i', message.items[0])
-        if self.nursery is not None:
-            self.nursery.start_soon(stream.send_all, bytes(t))
+    def _set_cf_log(self, message: LogMessage):
+        """Handler for the logging session."""
+        # self.log.info(f"[{trio.current_time():.2f}]message.items: {message.items}, type {type(message.items[0])}")
+        self.cf_log = message.items
 
     async def stream_to_cf(self, stream: trio.SocketStream, *, tcp_port: int):
         """ function we use to continously stream LQR parameters to the drone"""
         self.log.info(f"Client connected to LQR port.")
         cf_id: bytes = await stream.receive_some()
         cf_id: str = cf_id.decode()
+        idx = 0
+        frequency = 15
         try:
             uav: CrazyflieUAV = self.app.object_registry.find_by_id(cf_id)
             cf = uav._get_crazyflie()
             self.log.info(f"cf{cf_id} found.")
             self.streams[tcp_port].append(stream)
-
+            # we need to use the drone's logger, but a separate log session
             self._log_session = cf.log.create_session()
-            print(f"tried creating log session: {self._log_session}")
             self._log_session.configure(graceful_cleanup=True)
             self._log_session.create_block(
                 "Lqr.traj_timestamp",
-                period=1,
-                handler=partial(self._send_time_to_client, stream=stream),  # handler runs in the same nursery as this
+                frequency=frequency,
+                handler=self._set_cf_log,
             )
+            self.cf_log = (0,)
             async with self._log_session:
                 self.nursery.start_soon(self._log_session.process_messages)
 
-                # FOR TESTING:
-                await sleep(2)
-                await stream.send_all(b'START')
+                # # FOR TESTING:
+                # await sleep(2)
+                # await stream.send_all(b'START')
 
+                # We only let the handler function update self.cf_log, instead of also initiating a parameter
+                # send, since its timer can be a bit random. Instead, we read from self.cf_log at regular intervals,
+                # and then send the time therein.
+                next_send = trio.current_time() + 1/frequency
                 while True:
-                    try:
-                        msg = await stream.receive_some()
-                        if msg:
-                            port, channel, data = pickle.loads(msg)
-                            # self.log.info(f"LQR: port {port} | channel {channel} | data {data}")
-                            packet = Struct("<BIffffff").pack(*data)
-                            # await cf.send_packet(port=port, channel=channel, data=packet)
-                        else:
-                            break
+                    await sleep_until(next_send)
+                    next_send += 1/frequency
+                    t_bytes = struct.pack('I', self.cf_log[0])  # unsigned int
+                    try:  # tell the client what time it is according to drone
+                        await stream.send_all(t_bytes)
                     except trio.BrokenResourceError:
                         break
+                    except Exception as e:
+                        self.log.warning(e.__repr__())
+                        break
+                    # move_on_at ensures that if the communication is unreasonably delayed, we just ask for a new
+                    # timestamp instead
+                    with trio.move_on_at(next_send):
+                        while True:
+                            try:
+                                # we get port, channel, id which are uint8, then timestamp is uint32, rest are float32
+                                format = "<BBBIffffff"
+                                # message will contain K parameters, which we forward to the drone
+                                msg = await stream.receive_some(struct.calcsize(format))
+                                raw_data = struct.unpack(format, msg)
+                                expected_idx = idx + 1 if idx < 7 else 0
+                                port, channel, idx = raw_data[:3]
+                                data = raw_data[2:]
+                                if idx != expected_idx:
+                                    self.log.warning(f"{self.get_show_clock().seconds:.3f}: dropped a packet due to wrong index")
+                                packet = Struct("<BIffffff").pack(*data)
+                                await cf.send_packet(port=port, channel=channel, data=packet)
+                            except trio.BrokenResourceError:
+                                break
+                            except Exception as e:
+                                self.log.warning(e.__repr__())
+                                break
                 self.streams[tcp_port].remove(stream)
         except KeyError:
             self.log.warning(f"UAV by ID {cf_id} is not found in the client registry.")
         except RuntimeError as e:
             self.log.warning(f"{e!r}")
-
         self.log.info(f"[{self.get_show_clock().seconds:.2f}]: Client disconnected from LQR port.")
 
     async def _broadcast(self, stream: trio.SocketStream, *, port: int):
@@ -232,7 +251,7 @@ class aimotionlab(Extension):
                 except RuntimeError:
                     self.log.warning(f"failed to set param {parameter} for drone {uav.id}")
 
-    def _on_show_clock_changed(self, sender, *, nursery):
+    def _on_show_clock_changed(self, sender):
         """This function gets called when the "show:clock_changed" event is called."""
         self.log.info(f"Show clock changed")
         # self.parameter_scopes is a dictionary, keys are cf ids, values are Trio.CancelScope
@@ -247,7 +266,7 @@ class aimotionlab(Extension):
                 try:
                     uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
                     # Note: the parameter scopes aren't given as parameters to the function, but they could be :)
-                    nursery.start_soon(self._send_parameters_to_drone, uav, parameters)
+                    self.nursery.start_soon(self._send_parameters_to_drone, uav, parameters)
                 except KeyError:
                     self.log.warning(f"UAV by ID {uav_id} is not found in the client registry.")
 
@@ -257,31 +276,30 @@ class aimotionlab(Extension):
         if parameters[1] is not None:
             self.log.warning(f"Parameter updates detected for drone {parameters[0]}.")
 
-    def _on_show_start(self, sender, *, nursery):
+    def _on_show_start(self, sender):
         self.log.info(f"Starting show!")
 
         CAR_PORT = self.configuration.get("drone_port", 6000)+1
         for stream in self.streams[CAR_PORT]:
-            nursery.start_soon(stream.send_all, b'6')
+            self.nursery.start_soon(stream.send_all, b'6')
 
         SIM_PORT = CAR_PORT + 1
         for stream in self.streams[SIM_PORT]:
-            nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
+            self.nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
         LQR_PORT = SIM_PORT+1
         for stream in self.streams[LQR_PORT]:
-            nursery.start_soon(stream.send_all, b'START')
+            self.nursery.start_soon(stream.send_all, b'START')
 
     def _on_motion_capture_frame_received(
             self,
             sender,
             *,
             frame: "MotionCaptureFrame",
-            handler: AiMotionMocapFrameHandler,
-            nursery: trio.Nursery
+            handler: AiMotionMocapFrameHandler
     ) -> None:
         crazyflies: List[Crazyflie] = self._crazyflies()
-        nursery.start_soon(handler.notify_frame, frame, crazyflies)
+        self.nursery.start_soon(handler.notify_frame, frame, crazyflies)
 
     async def establish_drone_handler(self, drone_stream: trio.SocketStream):
         # when a client is trying to connect (i.e. a script wants permission to give commands to a drone),
