@@ -91,7 +91,7 @@ async def establish_connection_with_handler(drone_id: str):
         return None
 
 PORT = 6000
-drone = "08"
+drone = "07"
 
 async def demo():
     print("Welcome to a test demo!")

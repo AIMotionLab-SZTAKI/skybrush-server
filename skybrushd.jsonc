@@ -10,9 +10,13 @@
     },
     "aimotionlab": {
       "channel": 1,
-      "cf_port": 1,
-      "drone_port": 6000,
-      "configWord": "This is a config word for the aimotionlab extension",
+      "cf_crtp_port": 1,
+      "tcp_ports": {
+        "drone":  6000,
+        "car":  6001,
+        "sim":  6002,
+        "lqr":  6003
+      },
       "enabled": true,
       "memory_partitions": [
         {

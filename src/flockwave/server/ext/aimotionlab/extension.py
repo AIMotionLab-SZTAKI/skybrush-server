@@ -19,8 +19,20 @@ from flockwave.server.tasks import wait_until
 from copy import deepcopy
 from errno import ENODATA
 from struct import Struct
+from dataclasses import dataclass
 
 __all__ = ("aimotionlab", )
+
+
+@dataclass
+class TcpPort:
+    """Convenience class to package all data relating to a TCP port maintained by the server. A port has a number,
+    an informal name (corresponding to the same in skybrushd.jsonc), a function that gets called when a client
+    connects to it, and a list of the streams connected to it."""
+    port: int
+    name: str
+    func: Callable
+    streams: List[trio.SocketStream]
 
 
 class aimotionlab(Extension):
@@ -45,9 +57,10 @@ class aimotionlab(Extension):
                        "07": "\033[94m",
                        "08": "\033[96m",
                        "09": "\033[95m"}
-        self.streams: Dict[int, List[trio.SocketStream]] = {}  # a dictionary for the tcp ports where we broadcast
-        self.port_features: Dict[int, Callable] = {}  # a dictionary of what functions we should use for each tcp port
-        self.get_show_clock: Optional[Callable] = None  # TODO: comment
+
+        # For each port, we have a function, and a list of streams connected to that port
+        self.ports: Dict[int, TcpPort] = {}
+        self.get_show_clock: Optional[Callable] = None
         # Using the signals extension, we subscribe to the "show:clock_changed" event, and call _on_show_clock_changed,
         # which dispatches an instance of _send_parameters_to_drone for each drone in self.parameters. If we catch
         # another of these signals, then each process instance of _send_parameters_to_drone should be cancelled, and
@@ -55,7 +68,6 @@ class aimotionlab(Extension):
         # in them. A cancel scope can then be cancelled in _on_show_clock_changed. This dictionary below stores the
         # cancel scopes, much like self.parameters stores the parameters.
         self.parameter_scopes: Dict[str, trio.CancelScope()] = {}
-
         self.nursery: Optional[trio.Nursery] = None
         self._log_session: Optional[LogSession] = None
         self.cf_log: Optional[Any] = None
@@ -71,22 +83,28 @@ class aimotionlab(Extension):
             pass
             # self.log.warning(f"Connection lost to crazyflie.")
 
+    def _set_port_func(self, port_name: str, func: Callable):
+        """If the port is already present in self.ports, it changes its function while maintaining its streams. If the
+        port is not yet present, it adds it, with the list of streams being []"""
+        tcp_port_dict = self.configuration.get("tcp_ports", {})
+        try:
+            port_num = tcp_port_dict[port_name]
+            if port_num in self.ports:  # means we need to save its streams
+                streams: List[trio.SocketStream] = self.ports[port_num].streams
+                self.ports[port_num] = TcpPort(port=port_num, name=port_name, func=func, streams=streams)
+            else:
+                self.ports[port_num] = TcpPort(port=port_num, name=port_name, func=func, streams=[])
+        except KeyError:
+            self.log.warning(f"No such port in configuration: {port_name}")
+
     def configure(self, configuration: Configuration) -> None:
         super().configure(configuration)
         assert self.app is not None
         self.configuration = configuration
-        DRONE_PORT = configuration.get("drone_port", 6000)
-        self.port_features[DRONE_PORT] = self.establish_drone_handler
-        CAR_PORT = DRONE_PORT+1
-        self.port_features[CAR_PORT] = partial(self._broadcast, port=CAR_PORT)
-        self.streams[CAR_PORT] = []
-        SIM_PORT = DRONE_PORT+2
-        self.port_features[SIM_PORT] = partial(self._broadcast, port=SIM_PORT)
-        self.streams[SIM_PORT] = []  # TODO: is this necessary???? yes so we can do self.streams[port].append(stream) and functions that iterate over self.streams[port] don't crash when it's not defined
-
-        LQR_PORT = configuration.get("lqr_port", DRONE_PORT+3)
-        self.port_features[LQR_PORT] = partial(self.stream_to_cf, tcp_port=LQR_PORT)
-        self.streams[LQR_PORT] = []
+        self._set_port_func("drone", self.establish_drone_handler)
+        self._set_port_func("car", self._broadcast)
+        self._set_port_func("sim", self._broadcast)
+        self._set_port_func("lqr", self.stream_lqr_to_cf)
 
     async def run(self, app: "SkybrushServer", configuration, logger):
         """This function is called when the extension was loaded.
@@ -112,7 +130,7 @@ class aimotionlab(Extension):
         await sleep(1.0)
         with ExitStack() as stack:
             # create a dedicated mocap frame handler
-            frame_handler = AiMotionMocapFrameHandler(broadcast, configuration.get("cf_port", 1), configuration.get("channel"))
+            frame_handler = AiMotionMocapFrameHandler(broadcast, configuration.get("cf_crtp_port", 1), configuration.get("channel"))
             # subscribe to the motion capture frame signal
             async with trio.open_nursery() as nursery:
                 self.nursery = nursery
@@ -129,8 +147,9 @@ class aimotionlab(Extension):
                         }
                     )
                 )
-                for port, func in self.port_features.items():
-                    nursery.start_soon(partial(trio.serve_tcp, handler=func, port=port, handler_nursery=nursery))
+                for port_num, tcp_port in self.ports.items():
+                    handler = partial(tcp_port.func, port=port_num)
+                    nursery.start_soon(partial(trio.serve_tcp, handler=handler, port=port_num, handler_nursery=nursery))
             self.nursery = None
 
     def _set_cf_log(self, message: LogMessage):
@@ -138,18 +157,18 @@ class aimotionlab(Extension):
         # self.log.info(f"[{trio.current_time():.2f}]message.items: {message.items}, type {type(message.items[0])}")
         self.cf_log = message.items
 
-    async def stream_to_cf(self, stream: trio.SocketStream, *, tcp_port: int):
+    async def stream_lqr_to_cf(self, stream: trio.SocketStream, port: int):
         """ function we use to continously stream LQR parameters to the drone"""
         self.log.info(f"Client connected to LQR port.")
         cf_id: bytes = await stream.receive_some()
         cf_id: str = cf_id.decode()
         idx = 0
-        frequency = 15
+        frequency = 25
         try:
             uav: CrazyflieUAV = self.app.object_registry.find_by_id(cf_id)
             cf = uav._get_crazyflie()
             self.log.info(f"cf{cf_id} found.")
-            self.streams[tcp_port].append(stream)
+            self.ports[port].streams.append(stream)
             # we need to use the drone's logger, but a separate log session
             self._log_session = cf.log.create_session()
             self._log_session.configure(graceful_cleanup=True)
@@ -192,39 +211,40 @@ class aimotionlab(Extension):
                                 msg = await stream.receive_some(struct.calcsize(format))
                                 raw_data = struct.unpack(format, msg)
                                 expected_idx = idx + 1 if idx < 7 else 0
-                                port, channel, idx = raw_data[:3]
+                                crtp_port, channel, idx = raw_data[:3]
                                 data = raw_data[2:]
                                 if idx != expected_idx:
                                     self.log.warning(f"{self.get_show_clock().seconds:.3f}: dropped a packet due to wrong index")
                                 packet = Struct("<BIffffff").pack(*data)
-                                await cf.send_packet(port=port, channel=channel, data=packet)
+                                await cf.send_packet(port=crtp_port, channel=channel, data=packet)
                             except trio.BrokenResourceError:
                                 break
                             except Exception as e:
                                 self.log.warning(e.__repr__())
                                 break
-                self.streams[tcp_port].remove(stream)
+                self.ports[port].streams.remove(stream)
         except KeyError:
             self.log.warning(f"UAV by ID {cf_id} is not found in the client registry.")
         except RuntimeError as e:
             self.log.warning(f"{e!r}")
         self.log.info(f"[{self.get_show_clock().seconds:.2f}]: Client disconnected from LQR port.")
 
-    async def _broadcast(self, stream: trio.SocketStream, *, port: int):
-        self.streams[port].append(stream)
-        self.log.info(f"Number of connections on port {port} changed to {len(self.streams[port])}")
+    async def _broadcast(self, stream: trio.SocketStream, port: int):
+        streams = self.ports[port].streams
+        streams.append(stream)
+        self.log.info(f"Number of connections on port {port} changed to {len(streams)}")
         while True:
             try:
                 data = await stream.receive_some()
                 if data:
-                    for target_stream in [other_stream for other_stream in self.streams[port] if other_stream != stream]:
+                    for target_stream in [other_stream for other_stream in streams if other_stream != stream]:
                         await target_stream.send_all(data)
                 else:
                     break
             except trio.BrokenResourceError:
                 break
-        self.streams[port].remove(stream)
-        self.log.info(f"Number of connections on port {port} changed to {len(self.streams[port])}")
+        streams.remove(stream)
+        self.log.info(f"Number of connections on port {port} changed to {len(streams)}")
 
     async def _send_parameters_to_drone(self, uav: CrazyflieUAV, parameters):
         """This function dispatches the parameters listed in the self.parameters dictionary to the uav in the dictionary
@@ -260,7 +280,6 @@ class aimotionlab(Extension):
         self.parameter_scopes = {}  # clear the parameter scopes
         for uav_id in self.parameters.keys():  # for the drones that require parameter switches:
             self.parameter_scopes[uav_id] = trio.CancelScope()  # make a cancelscope for each
-        # TODO: Test with multiple drones and multiple parameters
         for uav_id, parameters in self.parameters.items():
             if parameters is not None:
                 try:
@@ -278,17 +297,13 @@ class aimotionlab(Extension):
 
     def _on_show_start(self, sender):
         self.log.info(f"Starting show!")
-
-        CAR_PORT = self.configuration.get("drone_port", 6000)+1
-        for stream in self.streams[CAR_PORT]:
+        for stream in self.ports[self.configuration.get("tcp_ports", {})["car"]].streams:
             self.nursery.start_soon(stream.send_all, b'6')
 
-        SIM_PORT = CAR_PORT + 1
-        for stream in self.streams[SIM_PORT]:
+        for stream in self.ports[self.configuration.get("tcp_ports", {})["sim"]].streams:
             self.nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
 
-        LQR_PORT = SIM_PORT+1
-        for stream in self.streams[LQR_PORT]:
+        for stream in self.ports[self.configuration.get("tcp_ports", {})["lqr"]].streams:
             self.nursery.start_soon(stream.send_all, b'START')
 
     def _on_motion_capture_frame_received(
@@ -301,7 +316,7 @@ class aimotionlab(Extension):
         crazyflies: List[Crazyflie] = self._crazyflies()
         self.nursery.start_soon(handler.notify_frame, frame, crazyflies)
 
-    async def establish_drone_handler(self, drone_stream: trio.SocketStream):
+    async def establish_drone_handler(self, drone_stream: trio.SocketStream, port: int):
         # when a client is trying to connect (i.e. a script wants permission to give commands to a drone),
         # we must check what uavs are recognised by the server:
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
