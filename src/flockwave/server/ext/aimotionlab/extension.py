@@ -71,6 +71,7 @@ class aimotionlab(Extension):
         self.nursery: Optional[trio.Nursery] = None
         self._log_session: Optional[LogSession] = None
         self.cf_log: Optional[Any] = None
+        self.log_event: Optional[trio.Event] = None
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -153,31 +154,35 @@ class aimotionlab(Extension):
             self.nursery = None
 
     def _set_cf_log(self, message: LogMessage):
-        """Handler for the logging session."""
-        # self.log.info(f"[{trio.current_time():.2f}]message.items: {message.items}, type {type(message.items[0])}")
-        self.cf_log = message.items
+        """Handler for the logging session. Saves the log message and sets the event indicating this."""
+        if self.log_event is not None:
+            # self.log.info(f"[{trio.current_time():.2f}]message.items: {message.items}, type {type(message.items[0])}")
+            self.cf_log = message.items
+            self.log_event.set()
 
     async def stream_lqr_to_cf(self, stream: trio.SocketStream, port: int):
         """ function we use to continously stream LQR parameters to the drone"""
         self.log.info(f"Client connected to LQR port.")
         cf_id: bytes = await stream.receive_some()
         cf_id: str = cf_id.decode()
-        idx = 0
-        frequency = 25
+        frequency = 30
+        # num_lqr_params = 8  # 11 for bumblebee, but not used right now anyway
+        log_str = "Lqr2.traj_timestamp"  # "Lqr2.traj_timestamp" for bumblebee
         try:
             uav: CrazyflieUAV = self.app.object_registry.find_by_id(cf_id)
             cf = uav._get_crazyflie()
             self.log.info(f"cf{cf_id} found.")
             self.ports[port].streams.append(stream)
             # we need to use the drone's logger, but a separate log session
+            self.log_event = trio.Event()
+            self.cf_log = (0,)
             self._log_session = cf.log.create_session()
             self._log_session.configure(graceful_cleanup=True)
             self._log_session.create_block(
-                "Lqr.traj_timestamp",
+                log_str,
                 frequency=frequency,
                 handler=self._set_cf_log,
             )
-            self.cf_log = (0,)
             async with self._log_session:
                 self.nursery.start_soon(self._log_session.process_messages)
 
@@ -185,13 +190,10 @@ class aimotionlab(Extension):
                 # await sleep(2)
                 # await stream.send_all(b'START')
 
-                # We only let the handler function update self.cf_log, instead of also initiating a parameter
-                # send, since its timer can be a bit random. Instead, we read from self.cf_log at regular intervals,
-                # and then send the time therein.
-                next_send = trio.current_time() + 1/frequency
                 while True:
-                    await sleep_until(next_send)
-                    next_send += 1/frequency
+                    await self.log_event.wait()
+                    self.log_event = trio.Event()  # refresh
+                    self.lqr_send_scope = trio.CancelScope()  # refresh
                     t_bytes = struct.pack('I', self.cf_log[0])  # unsigned int
                     try:  # tell the client what time it is according to drone
                         await stream.send_all(t_bytes)
@@ -200,9 +202,9 @@ class aimotionlab(Extension):
                     except Exception as e:
                         self.log.warning(e.__repr__())
                         break
-                    # move_on_at ensures that if the communication is unreasonably delayed, we just ask for a new
-                    # timestamp instead
-                    with trio.move_on_at(next_send):
+                    # not sure if we need a cancel scope. As of right now, I don't think we do, but I'm open to it
+                    # as well as a scope, we may also count the packets we send, but that seems unnecessary now
+                    with trio.move_on_after(1/frequency):
                         while True:
                             try:
                                 # we get port, channel, id which are uint8, then timestamp is uint32, rest are float32
@@ -210,13 +212,11 @@ class aimotionlab(Extension):
                                 # message will contain K parameters, which we forward to the drone
                                 msg = await stream.receive_some(struct.calcsize(format))
                                 raw_data = struct.unpack(format, msg)
-                                expected_idx = idx + 1 if idx < 7 else 0
                                 crtp_port, channel, idx = raw_data[:3]
                                 data = raw_data[2:]
-                                if idx != expected_idx:
-                                    self.log.warning(f"{self.get_show_clock().seconds:.3f}: dropped a packet due to wrong index")
                                 packet = Struct("<BIffffff").pack(*data)
                                 await cf.send_packet(port=crtp_port, channel=channel, data=packet)
+                                await sleep(1/1000)  # bit of a rate limit (probably not necessary)
                             except trio.BrokenResourceError:
                                 break
                             except Exception as e:
