@@ -165,7 +165,7 @@ class aimotionlab(Extension):
         self.log.info(f"Client connected to LQR port.")
         cf_id: bytes = await stream.receive_some()
         cf_id: str = cf_id.decode()
-        frequency = 30
+        frequency = 20
         # num_lqr_params = 8  # 11 for bumblebee, but not used right now anyway
         log_str = "Lqr2.traj_timestamp"  # "Lqr2.traj_timestamp" for bumblebee
         try:
@@ -191,32 +191,40 @@ class aimotionlab(Extension):
                 # await stream.send_all(b'START')
 
                 while True:
-                    await self.log_event.wait()
-                    self.log_event = trio.Event()  # refresh
-                    self.lqr_send_scope = trio.CancelScope()  # refresh
-                    t_bytes = struct.pack('I', self.cf_log[0])  # unsigned int
-                    try:  # tell the client what time it is according to drone
-                        await stream.send_all(t_bytes)
-                    except trio.BrokenResourceError:
-                        break
-                    except Exception as e:
-                        self.log.warning(e.__repr__())
-                        break
                     # not sure if we need a cancel scope. As of right now, I don't think we do, but I'm open to it
                     # as well as a scope, we may also count the packets we send, but that seems unnecessary now
                     with trio.move_on_after(1/frequency):
+                        self.log.info(f"[{self.get_show_clock().seconds:.3f}]: begin transaction, move on at [{(self.get_show_clock().seconds + 1/frequency):.3f}]")
+                        await self.log_event.wait()
+                        self.log_event = trio.Event()  # refresh
+                        t = self.cf_log[0]
+                        t_bytes = struct.pack('I', t)  # unsigned int
+                        try:  # tell the client what time it is according to drone
+                            await stream.send_all(t_bytes)
+                            self.log.info(f"[{self.get_show_clock().seconds:.3f}]: sent param request")
+                        except trio.BrokenResourceError:
+                            break
+                        except Exception as e:
+                            self.log.warning(e.__repr__())
+                            break
                         while True:
                             try:
                                 # we get port, channel, id which are uint8, then timestamp is uint32, rest are float32
                                 format = "<BBBIffffff"
                                 # message will contain K parameters, which we forward to the drone
+                                self.log.info(f"[{self.get_show_clock().seconds:.3f}]: waiting params")
                                 msg = await stream.receive_some(struct.calcsize(format))
                                 raw_data = struct.unpack(format, msg)
                                 crtp_port, channel, idx = raw_data[:3]
                                 data = raw_data[2:]
-                                packet = Struct("<BIffffff").pack(*data)
-                                await cf.send_packet(port=crtp_port, channel=channel, data=packet)
-                                await sleep(1/1000)  # bit of a rate limit (probably not necessary)
+                                if t+120 != data[1]:
+                                    self.log.info(f"[{self.get_show_clock().seconds:.3f}]: dropped slow packet @ ({t} vs {data[1]})")
+                                else:
+                                    self.log.info(f"[{self.get_show_clock().seconds:.3f}]: received idx {data[0]} @{data[1]}")
+                                    packet = Struct("<BIffffff").pack(*data)
+                                    await cf.send_packet(port=crtp_port, channel=channel, data=packet)
+                                    self.log.info(f"[{self.get_show_clock().seconds:.3f}]: sent idx {data[0]} @{data[1]} to drone")
+                                #await sleep(1/1000)  # bit of a rate limit (probably not necessary)
                             except trio.BrokenResourceError:
                                 break
                             except Exception as e:
