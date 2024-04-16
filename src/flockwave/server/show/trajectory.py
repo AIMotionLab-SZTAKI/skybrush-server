@@ -164,6 +164,15 @@ class TrajectorySpecification:
             raise RuntimeError("only version 1 trajectories are supported")
 
     @property
+    def lqr_params_bounds(self) -> Tuple[Optional[List[int]], Optional[List[float]]]:
+        lqr_K = self._data.get("K")
+        lqr_bounds = self._data.get("bounds")
+        if lqr_K is not None and lqr_bounds is not None:
+            return lqr_K, lqr_bounds
+        else:
+            return None, None
+
+    @property
     def bounding_box(self) -> Tuple[Point, Point]:
         """Returns the coordinates of the opposite corners of the axis-aligned
         bounding box of the trajectory.

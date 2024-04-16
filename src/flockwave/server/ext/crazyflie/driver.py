@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from collections import defaultdict
 from colour import Color
 from contextlib import asynccontextmanager, AsyncExitStack
@@ -67,6 +68,8 @@ from .crtp_extensions import (
     LightProgramLocation,
     LightProgramType,
     PreflightCheckStatus,
+    MEM_TYPE_LQR,
+    MEM_TYPE_LQR_BOUNDS
 )
 from .fence import Fence, FenceConfiguration
 from .trajectory import encode_trajectory, TrajectoryEncoding
@@ -1051,6 +1054,22 @@ class CrazyflieUAV(UAVBase):
         if scale > 1:
             raise RuntimeError("Trajectory covers too large an area for a Crazyflie")
 
+        lqr_K, lqr_bounds = trajectory.lqr_params_bounds
+        if lqr_K is not None and lqr_bounds is not None:
+            params_format = "<" + "h" * len(lqr_K)
+            bounds_format = "<" + "f" * len(lqr_bounds)
+            params = struct.pack(params_format, *lqr_K)
+            bounds = struct.pack(bounds_format, *lqr_bounds)
+            try:
+                await self._upload_lqr_params(params, bounds)
+            except OSError as ex:
+                if ex.errno == EIO:
+                    raise RuntimeError(
+                        "IO error while uploading LQR parameters; is it too large?"
+                    ) from None
+                else:
+                    raise
+
         light_program = get_light_program_from_show_specification(show)
         try:
             await self._upload_light_program(light_program)
@@ -1306,6 +1325,18 @@ class CrazyflieUAV(UAVBase):
             check.result = self._preflight_result_map[code]
 
         self._preflight_status.update_summary()
+
+    async def _upload_lqr_params(self, params: bytes, bounds: bytes):
+        """Uploads the given LQR parameters and their bounds to the crazyflie (parameters are int16 in order
+        to fit into the ram, bounds are floats)."""
+        cf = self._get_crazyflie()
+        try:
+            memory_param = await cf.mem.find(MEM_TYPE_LQR)
+            memory_bounds = await cf.mem.find(MEM_TYPE_LQR_BOUNDS)
+        except ValueError:
+            raise RuntimeError("LQR params are not supported on this drone.") from None
+        addr_param = await write_with_checksum(memory_param, 0, params, only_if_changed=True)
+        addr_bounds = await write_with_checksum(memory_bounds, 0, bounds, only_if_changed=True)
 
     async def _upload_light_program(self, data: bytes) -> None:
         """Uploads the given light program to the Crazyflie drone."""

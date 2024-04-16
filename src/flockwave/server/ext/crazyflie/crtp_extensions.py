@@ -25,6 +25,9 @@ DRONE_SHOW_PORT = CRTPPort.UNUSED_1
 #: Constent representing the identifier of the geofence memory
 MEM_TYPE_FENCE = 0x40
 
+MEM_TYPE_LQR = 0x50
+MEM_TYPE_LQR_BOUNDS = 0x51
+
 
 class DroneShowCommand(IntEnum):
     """Enum representing the possible command codes we can send to the

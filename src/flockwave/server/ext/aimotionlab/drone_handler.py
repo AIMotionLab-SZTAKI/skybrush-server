@@ -14,6 +14,7 @@ from aiocflib.utils.checksum import crc32
 from aiocflib.utils.chunks import chunkify
 from aiocflib.errors import error_to_string
 from errno import ENODATA
+import sys
 
 
 async def write(self, addr: int, data: bytes, timeout: float = 0.2, attempts: int = 3) -> None:
@@ -23,6 +24,9 @@ async def write(self, addr: int, data: bytes, timeout: float = 0.2, attempts: in
     for start, size in chunkify(
             0, len(data), step=MemoryHandler.MAX_WRITE_REQUEST_LENGTH
     ):
+        if addr != 0:
+            sys.stdout.write(f"\rUpload progress: {int((start+size)/len(data)*100)}%: \t{'#'*int(start/len(data)*60)}")
+            sys.stdout.flush()
         status = await self._write_chunk(addr + start, data[start: (start + size)], timeout=timeout, attempts=attempts)
         if status:
             raise IOError(
@@ -31,6 +35,8 @@ async def write(self, addr: int, data: bytes, timeout: float = 0.2, attempts: in
                     status, error_to_string(status)
                 ),
             )
+    if addr != 0:
+        print()
 
 
 async def _write_chunk(self, addr: int, data: bytes, timeout: float = 0.2, attempts: int = 3) -> int:
