@@ -14,7 +14,7 @@ import numpy as np
 from .math import get_poly_degree, to_bernstein_form
 
 
-__all__ = ("encode_trajectory", "Poly4D", "to_poly4d_sequence")
+__all__ = ("encode_trajectory", "Poly4D", "to_poly4d_sequence", "TrajectoryEncoding")
 
 
 class TrajectoryEncoding(IntEnum):

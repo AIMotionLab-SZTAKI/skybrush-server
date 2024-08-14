@@ -3,7 +3,7 @@ import math
 
 import trio
 from flockwave.ext.base import Configuration
-from trio import sleep, sleep_until
+from trio import sleep, sleep_until, Event
 from flockwave.server.app import SkybrushServer
 from flockwave.server.ext.base import Extension
 from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
@@ -34,6 +34,14 @@ class TcpPort:
     name: str
     func: Callable
     streams: List[trio.SocketStream]
+
+
+def notify_port(port: TcpPort, msg: bytes, nursery: trio.Nursery):
+    try:
+        for stream in port.streams:
+            nursery.start_soon(stream.send_all, msg)
+    except Exception as exc:
+        print(f"Exception: {exc!r}")
 
 
 class aimotionlab(Extension):
@@ -73,6 +81,7 @@ class aimotionlab(Extension):
         self._log_session: Optional[LogSession] = None
         self.cf_log: Optional[Any] = None
         self.log_event: Optional[trio.Event] = None
+        self.event_notifications: Dict[str, Dict[int, bytes]] = {}
 
     def _crazyflies(self):
         uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
@@ -84,6 +93,18 @@ class aimotionlab(Extension):
         except RuntimeError:
             pass
             # self.log.warning(f"Connection lost to crazyflie.")
+
+    def _register_event_notification(self, event: str, port: Union[str, int], msg: bytes):
+        tcp_port_dict = self.configuration.get("tcp_ports", {})
+        try:
+            if isinstance(port, str): # port was given as string -> look up port number
+                port = tcp_port_dict[port]
+        except KeyError:
+            self.log.warning(f"Tried to assign notification to non-existent port.")
+        if event not in self.event_notifications:
+            self.event_notifications[event] = {port: msg}
+        else:
+            self.event_notifications[event][port] = msg
 
     def _set_port_func(self, port_name: str, func: Callable):
         """If the port is already present in self.ports, it changes its function while maintaining its streams. If the
@@ -107,6 +128,9 @@ class aimotionlab(Extension):
         self._set_port_func("car", self._broadcast)
         self._set_port_func("sim", self._broadcast)
         self._set_port_func("lqr", self.stream_lqr_to_cf)
+        self._register_event_notification("show:start", "car", struct.pack("f", 5.5))
+        self._register_event_notification("show:start", "sim", b'00_CMDSTART_show_EOF')
+        self._register_event_notification("show:start", "lqr", b'START')
 
     async def run(self, app: "SkybrushServer", configuration, logger):
         """This function is called when the extension was loaded.
@@ -266,7 +290,7 @@ class aimotionlab(Extension):
         assert self.get_show_clock is not None
         clock: ShowClock = self.get_show_clock()  # grab the show clock: we send parameters out as per this clock
         assert clock is not None
-        with self.parameter_scopes[uav.id]:
+        with self.parameter_scopes[uav.id] as cancel_scope:
             for t, parameter, value in parameters:
                 # edge_triggered=False -> level triggered, meaning that if the clock is over the given time, the wait
                 # returns immediately, i.e. we can set a time such as -1000 and it will execute at once
@@ -281,7 +305,17 @@ class aimotionlab(Extension):
                         self.log.warning(f"PARAMETER FOR DRONE {uav.id} WASN'T SET CORRECTLY")
                         raise RuntimeError
                 except RuntimeError:
-                    self.log.warning(f"failed to set param {parameter} for drone {uav.id}")
+                    self.log.warning(f"Failed to set param {parameter} for drone {uav.id}.")
+                    if clock.seconds <= 0:
+                        self.log.warning(f"Drone {uav.id}: shutting down for safety.")
+                        await uav.shutdown()
+                    cancel_scope.cancel()
+                except KeyError:
+                    self.log.warning(f"No such parameter: {parameter} for drone {uav.id}.")
+                    if clock.seconds <= 0:
+                        self.log.warning(f"Drone {uav.id}: shutting down for safety.")
+                        await uav.shutdown()
+                    cancel_scope.cancel()
 
     def _on_show_clock_changed(self, sender):
         """This function gets called when the "show:clock_changed" event is called."""
@@ -309,14 +343,9 @@ class aimotionlab(Extension):
 
     def _on_show_start(self, sender):
         self.log.info(f"Starting show!")
-        for stream in self.ports[self.configuration.get("tcp_ports", {})["car"]].streams:
-            self.nursery.start_soon(stream.send_all, b'6')
-
-        for stream in self.ports[self.configuration.get("tcp_ports", {})["sim"]].streams:
-            self.nursery.start_soon(stream.send_all, b'00_CMDSTART_show_EOF')
-
-        for stream in self.ports[self.configuration.get("tcp_ports", {})["lqr"]].streams:
-            self.nursery.start_soon(stream.send_all, b'START')
+        for port_num, msg in self.event_notifications["show:start"].items():
+            port = self.ports[port_num]
+            notify_port(port, msg, self.nursery)
 
     def _on_motion_capture_frame_received(
             self,

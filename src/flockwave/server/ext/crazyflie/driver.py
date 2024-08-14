@@ -75,6 +75,8 @@ from .fence import Fence, FenceConfiguration
 from .trajectory import encode_trajectory, TrajectoryEncoding
 from .types import ControllerType
 
+from scipy.spatial.transform import Rotation
+
 import pickle
 
 if TYPE_CHECKING:
@@ -1229,7 +1231,14 @@ class CrazyflieUAV(UAVBase):
         self._velocity = VelocityXYZ()
 
     def _print_log(self, message):
-        print(repr(message.items))
+        quat = message.items[2:]
+        rpy = Rotation.from_quat(quat).as_euler("XYZ")
+        print(f"alpha: {rpy[0]}")
+        print(f"beta: {rpy[1]}")
+        #print(f"yaw: {rpy[2]}")
+        print(f"alpha_comp: {message.items[0]}")
+        print(f"beta_comp: {message.items[1]}")
+        print()
 
     def _setup_logging_session(self) -> LogSession:
         """Sets up the log blocks that contain the variables we need from the
@@ -1243,13 +1252,18 @@ class CrazyflieUAV(UAVBase):
 
         return session
         session.create_block(
-            "Lqr.traj_timestamp",
+            "Lqr2.alpha",
+            "Lqr2.beta",
+            "load_pose.qx",
+            "load_pose.qy",
+            "load_pose.qz",
+            "load_pose.qw",
             # "controller.ctr_roll",
             # "controller.ctr_pitch",
             # "controller.ctr_yaw",
             # "controller.ctr_thrust",
             # "ctrlLqr1Dof.cmd_pitch",
-            period=1,
+            period=2,
             handler=self._print_log,
         )
         return session
