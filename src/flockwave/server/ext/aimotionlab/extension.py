@@ -129,7 +129,7 @@ class aimotionlab(Extension):
         self._set_port_func("sim", self._broadcast)
         self._set_port_func("lqr", self.stream_lqr_to_cf)
         self._register_event_notification("show:start", "car", struct.pack("f", 5.5))
-        self._register_event_notification("show:start", "sim", b'00_CMDSTART_show_EOF')
+        self._register_event_notification("show:start", "sim", b'START')
         self._register_event_notification("show:start", "lqr", b'START')
 
     async def run(self, app: "SkybrushServer", configuration, logger):

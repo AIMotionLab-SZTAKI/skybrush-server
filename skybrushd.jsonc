@@ -56,7 +56,7 @@
     },
     "motion_capture": {
       "enabled": true,
-      "frame_rate": 35,
+      "frame_rate": 30,
       "mapping": {
         "rules": [
           {

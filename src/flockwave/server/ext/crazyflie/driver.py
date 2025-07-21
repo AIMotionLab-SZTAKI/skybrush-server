@@ -1231,14 +1231,8 @@ class CrazyflieUAV(UAVBase):
         self._velocity = VelocityXYZ()
 
     def _print_log(self, message):
-        quat = message.items[2:]
-        rpy = Rotation.from_quat(quat).as_euler("XYZ")
-        print(f"alpha: {rpy[0]}")
-        print(f"beta: {rpy[1]}")
-        #print(f"yaw: {rpy[2]}")
-        print(f"alpha_comp: {message.items[0]}")
-        print(f"beta_comp: {message.items[1]}")
-        print()
+        print(message.items)
+
 
     def _setup_logging_session(self) -> LogSession:
         """Sets up the log blocks that contain the variables we need from the
@@ -1252,18 +1246,31 @@ class CrazyflieUAV(UAVBase):
 
         return session
         session.create_block(
-            "Lqr2.alpha",
-            "Lqr2.beta",
-            "load_pose.qx",
-            "load_pose.qy",
-            "load_pose.qz",
-            "load_pose.qw",
+            # "controller.rollRate",
+            # "controller.pitchRate",
+            # "controller.yawRate",
+            # "controller.rollRate_ext",
+            # "controller.pitchRate_ext",
+            # "controller.yawRate_ext",
+            # "controller.thrust_ext",
+            # "controller.actuatorThrust",
+            # "controller.ctr_roll",
+            # "load_pose.qy",
+            # "load_pose.qz",
+            # "load_pose.qw",
             # "controller.ctr_roll",
             # "controller.ctr_pitch",
             # "controller.ctr_yaw",
             # "controller.ctr_thrust",
             # "ctrlLqr1Dof.cmd_pitch",
-            period=2,
+            # "horizon.path_param",
+            # "horizon.point_0_x",
+            # "horizon.point_0_y",
+            # "horizon.point_0_z",
+            "Lqr2.alpha",
+            "Lqr2.beta",
+            "Lqr2.hook_control_on",
+            period=0.5,
             handler=self._print_log,
         )
         return session

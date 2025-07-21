@@ -53,3 +53,4 @@ Installation
    issue with the motion capture system, the drone's position will diverge. If you turned
    on the drone's tracking in motive *after* the server was launched, you need to restart
    the server.
+7. You can connect to the skybrush server's web ui on http://localhost:5000/app/.
