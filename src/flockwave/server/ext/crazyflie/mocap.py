@@ -1,4 +1,7 @@
-from typing import List, Tuple, TYPE_CHECKING
+import time
+from typing import List, Tuple, TYPE_CHECKING, Callable, Optional
+from functools import partial
+from aiocflib.crazyflie import Crazyflie
 
 from aiocflib.crtp.crtpstack import CRTPPort
 from aiocflib.crazyflie.localization import (
@@ -13,10 +16,26 @@ from flockwave.server.utils import chunks
 from .connection import BroadcasterFunction
 
 if TYPE_CHECKING:
-    from .driver import CrazyflieDriver
-    from flockwave.server.ext.motion_capture import MotionCaptureFrame
+    from .driver import CrazyflieDriver, CrazyflieUAV
+    from flockwave.server.ext.motion_capture import MotionCaptureFrame, MotionCaptureFrameItem
 
 __all__ = ("CrazyflieMocapFrameHandler",)
+
+
+def determine_rigidbody(uav: "CrazyflieUAV", frame: "MotionCaptureFrame") -> Optional["MotionCaptureFrameItem"]:
+    """
+    Take an uav and a mocap frame, and determine which rigidbody in the frame belongs to that uav.
+    If multiple rigidbodies may be associated with the uav, returns the first one, disregarding the rest.
+    If no rigidbodies match, returns None.
+    The matching is based on the names of the items in the frame and the id of the uav.
+    """
+    for item in frame.items:
+        try:
+            if int(uav.id) == int(item.name):
+                return item
+        except ValueError:
+            continue
+    return None
 
 
 class CrazyflieMocapFrameHandler:
@@ -32,72 +51,33 @@ class CrazyflieMocapFrameHandler:
 
     def __init__(
         self,
-        driver: "CrazyflieDriver",
-        broadcaster: BroadcasterFunction,
-        *,
-        send_pose: bool = True
+        nursery,
+        crazyflies_getter
     ):
         """Constructor."""
-        self._broadcaster = broadcaster
-        self._driver = driver
-        self.send_pose = bool(send_pose)
+        self._get_crazyflies: Callable[[], list[CrazyflieUAV]] = crazyflies_getter
+        self.nursery = nursery
 
     def notify_frame(self, frame: "MotionCaptureFrame") -> None:
-        # In theory, the signal that calls this function is rate-limited by the
-        # mocap extension, so this function is not called "too often" -- that's
-        # why there's no rate limiting here. Add rate limiting if this becomes
-        # a problem.
-
-        # TODO(ntamas): broadcast only those that match the address space of
-        # the broadcaster; the current solution does not work for multiple
-        # Crazyradios in different address spaces yet
-
-        positions: List[Tuple[int, Tuple[float, float, float]]] = []
-        poses: List[Tuple[int, Tuple[float, float, float], QuaternionXYZW]] = []
-
-        for item in frame.items:
-            # TODO(ntamas): currently we assume that the numeric ID of the
-            # Crazyflie that we need to send in the localization packet is
-            # equal to the numeric ID in Skybrush. This is a hack, but we do not
-            # have a better mechanism yet; the other option would be to take the
-            # Crazyflie URI, assume that it ends with the radio address in hex,
-            # and then convert the last two characters back to a numeric ID.
+        for uav in self._get_crazyflies():
             try:
-                numeric_id = int(item.name)
-            except ValueError:
+                # might raise RuntimeError if the actual crazyflie isn't connected,
+                # but the python object remains in the object registry (e.g. the crazyflie
+                # was turned off or restarted)
+                cf: Crazyflie = uav._get_crazyflie()
+            except RuntimeError:
+                # in this case, just skip this cf
                 continue
+            rigidbody = determine_rigidbody(uav, frame)
+            if rigidbody is not None:
+                qw, qx, qy, qz = rigidbody.attitude
+                x, y, z = rigidbody.position
+                port = 6  # CRTP_PORT_LOCALIZATION
+                channel = 1  # GENERIC_TYPE
+                packet = cf.localization._external_pose_struct.pack(
+                    GenericLocalizationCommand.EXT_POSE, x, y, z, qx, qy, qz, qw)
+                try:
+                    self.nursery.start_soon(partial(cf.send_packet, port=port, channel=channel, data=packet))
+                except AttributeError:
+                    continue
 
-            if item.position is None:
-                # No position, we cannot do anything with this item
-                continue
-
-            if item.attitude is None or not self.send_pose:
-                # This item only has position information but no attitude
-                positions.append((numeric_id, item.position))
-            else:
-                # This item has both position and attitude info, but we need to
-                # convert the attitude to a QuaternionXYZW
-                w, x, y, z = item.attitude
-                poses.append((numeric_id, item.position, QuaternionXYZW(x, y, z, w)))
-
-        # Crazyflie broadcast localization packets can accommodate coordinates
-        # for 4 drones when we send only position information
-        for chunk in chunks(positions, 4):
-            packet = Localization.encode_external_position_packed(chunk)
-            self._broadcaster(
-                CRTPPort.LOCALIZATION,
-                LocalizationChannel.POSITION_PACKED,
-                packet,
-            )
-
-        # Crazyflie broadcast localization packets can accommodate coordinates
-        # for 2 drones when pose is also needed
-        for chunk in chunks(poses, 2):
-            packet = bytes(
-                [GenericLocalizationCommand.EXT_POSE_PACKED]
-            ) + Localization.encode_external_pose_packed(chunk)
-            self._broadcaster(
-                CRTPPort.LOCALIZATION,
-                LocalizationChannel.GENERIC,
-                packet,
-            )

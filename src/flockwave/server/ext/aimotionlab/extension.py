@@ -83,17 +83,6 @@ class aimotionlab(Extension):
         self.log_event: Optional[trio.Event] = None
         self.event_notifications: Dict[str, Dict[int, bytes]] = {}
 
-    def _crazyflies(self):
-        uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
-        uavs: List[CrazyflieUAV] = []
-        for uav_id in uav_ids:
-            uavs.append(self.app.object_registry.find_by_id(uav_id))
-        try:
-            return [uav._get_crazyflie() for uav in uavs]
-        except RuntimeError:
-            pass
-            # self.log.warning(f"Connection lost to crazyflie.")
-
     def _register_event_notification(self, event: str, port: Union[str, int], msg: bytes):
         tcp_port_dict = self.configuration.get("tcp_ports", {})
         try:
@@ -354,7 +343,12 @@ class aimotionlab(Extension):
             frame: "MotionCaptureFrame",
             handler: AiMotionMocapFrameHandler
     ) -> None:
-        crazyflies: List[Crazyflie] = self._crazyflies()
+        crazyflies: List[Crazyflie] = []
+        for cf in self.crazyflies:
+            try:
+                crazyflies.append(cf._get_crazyflie())
+            except RuntimeError:
+                continue # skip this cf as it's not connected
         self.nursery.start_soon(handler.notify_frame, frame, crazyflies)
 
     async def establish_drone_handler(self, drone_stream: trio.SocketStream, port: int):

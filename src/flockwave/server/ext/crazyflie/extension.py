@@ -159,7 +159,7 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
 
                     # Create a dedicated mocap frame handler for the connection
                     mocap_frame_handler = CrazyflieMocapFrameHandler(
-                        self._driver, broadcaster
+                        nursery, lambda:self.crazyflies
                     )
 
                     # Register the radio connection in the connection registry

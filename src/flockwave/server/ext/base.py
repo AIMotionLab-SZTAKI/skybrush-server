@@ -9,6 +9,7 @@ from typing import Generic, Optional, TYPE_CHECKING, TypeVar
 from flockwave.ext.base import ExtensionBase
 
 if TYPE_CHECKING:
+    from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
     from flockwave.server.app import SkybrushServer  # noqa
     from flockwave.server.model.uav import UAVDriver
 
@@ -53,6 +54,12 @@ class Extension(ExtensionBase["SkybrushServer"]):
             / "ext"
             / (name or self.name or "_unnamed")
         )
+
+    @property
+    def crazyflies(self) -> list[CrazyflieUAV]:
+        from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
+        registry = self.app.object_registry
+        return [obj for obj in registry if isinstance(obj, CrazyflieUAV) and obj._crazyflie is not None]
 
 
 D = TypeVar("D", bound="UAVDriver")
