@@ -14,7 +14,8 @@ doc/skybrush-server-docs-*.zip
 htmlcov/
 tmp/
 .venv/
-.vscode/
+.vscode/*
+!.vscode/launch.json
 __pycache__/
 skybrush.cfg
 .idea/

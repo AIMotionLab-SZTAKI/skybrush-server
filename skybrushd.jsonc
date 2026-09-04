@@ -2,8 +2,8 @@
   "EXTENSIONS": {
     "crazyflie": {
       "connections": [
-        "crazyradio://0/80/1M/E7E7E7E7",
-        "crazyradio://1/90/1M/E7E7E7E7"
+        "crazyradio://0/80/1M/E7E7E7E7"
+        //"crazyradio://1/90/1M/E7E7E7E7"
       ],
       "enabled": true
       // "controller": "mellinger" this is how we would give a preferred controller for a show :)

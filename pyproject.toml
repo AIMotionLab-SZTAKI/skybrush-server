@@ -2,20 +2,21 @@
 name = "flockwave-server"
 version = "2.14.0"
 description = "Skybrush server component"
-authors = ["Tamas Nepusz <tamas@collmot.com>", "Gabor Vasarhelyi <vasarhelyi@collmot.com>"]
+authors = ["Tamas Nepusz <tamas@collmot.com>", "Gabor Vasarhelyi <vasarhelyi@collmot.com>", "Gaal Botond <kisgal98@gmail.com>"]
 license = "GPL-3.0-or-later"
 packages = [
     { include = "flockwave", from = "src" }
 ]
 
+# Upstream also declares a private "collmot" index (https://pypi.collmot.com/simple/)
+# supplying optional commercial skybrush-ext-* extensions. This fork removes it, along
+# with those optional dependencies and the extras that referenced them: we have no
+# credentials for that index, and taht made every dependency resolution (poetry lock, 
+# poetry add) fail.
+
 [[tool.poetry.source]]
 name = "PyPI"
 priority = "primary"
-
-[[tool.poetry.source]]
-name = "collmot"
-url = "https://pypi.collmot.com/simple/"
-priority = "explicit"
 
 [[tool.poetry.source]]
 name = "fury"
@@ -23,7 +24,9 @@ url = "https://pypi.fury.io/skybrush/"
 priority = "supplemental"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+# Upper bound: the locked motioncapture and numpy versions publish
+# no wheels above CPython 3.11. 
+python = ">=3.9,<3.12"
 bidict = ">=0.22.1"
 click = "^8.1.7"
 blinker = "^1.7.0"
@@ -49,11 +52,6 @@ flockwave-mavlink = {version = ">=0.1.0", source = "fury"}
 flockwave-net = { extras = ["async"], version = "^6.0.1", source = "fury" }
 flockwave-parsers = {version = "^2.1.0", source = "fury"}
 flockwave-spec = { version = "^1.80.0", source = "fury" }
-skybrush-ext-dock = {version = "^1.0.0", source = "collmot", optional = true}
-skybrush-ext-flockctrl = {version = "^2.25.0", source = "collmot", optional = true}
-skybrush-ext-map-cache = {version = "^1.0.0", source = "collmot", optional = true}
-skybrush-ext-sidekick = {version = "^1.0.1", source = "collmot", optional = true}
-skybrush-ext-timecode = {version = "^1.0.2", source = "collmot", optional = true}
 pyledctrl = {version = "^4.1.0", source = "fury"}
 aiocflib = "^4.0.1"
 appdirs = "^1.4.4"
@@ -76,11 +74,6 @@ pytest = "^7.4.4"
 pytest-cov = "^4.1.0"
 pytest-trio = ">=0.8.0"
 pdoc = "^14.3.0"
-
-[tool.poetry.extras]
-all = ["skybrush-ext-dock", "skybrush-ext-flockctrl", "skybrush-ext-map-cache", "skybrush-ext-sidekick", "skybrush-ext-timecode"]
-collmot = ["skybrush-ext-dock", "skybrush-ext-flockctrl", "skybrush-ext-map-cache", "skybrush-ext-timecode"]
-pro = ["skybrush-ext-map-cache", "skybrush-ext-sidekick", "skybrush-ext-timecode"]
 
 [tool.poetry.scripts]
 skybrushd = "flockwave.server.launcher:start"

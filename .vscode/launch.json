@@ -1,0 +1,45 @@
+{
+    // Debug configurations for the Skybrush server.
+    // See the "Running under a debugger" section of README.md for what each
+    // setting is for and for editor-independent equivalents.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Equivalent to: poetry run skybrushd -c skybrushd.jsonc
+            "name": "skybrushd",
+            "type": "debugpy",
+            "request": "launch",
+            // "module" rather than "program" runs flockwave/server/__main__.py
+            // the same way the generated skybrushd command does.
+            "module": "flockwave.server",
+            "args": [
+                "-c",
+                "skybrushd.jsonc"
+            ],
+            // The config path above is relative, so it is resolved against this.
+            "cwd": "${workspaceFolder}",
+            // A real terminal, so Ctrl+C reaches the process and you can watch
+            // the graceful shutdown path run.
+            "console": "integratedTerminal",
+            // Without this, breakpoints inside installed packages such as
+            // flockwave.ext or flockwave.app_framework are silently skipped.
+            "justMyCode": false
+        },
+        {
+            // Same, but with the server's own --debug flag, which raises the
+            // log level to DEBUG. Unrelated to the debugger itself.
+            "name": "skybrushd (verbose logging)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flockwave.server",
+            "args": [
+                "-c",
+                "skybrushd.jsonc",
+                "--debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}
