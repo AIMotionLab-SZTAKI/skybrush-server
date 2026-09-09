@@ -750,14 +750,76 @@ This is the lab's own extension, and the main reason this fork exists. It declar
 
 **Show integration.** The extension subscribes to three signals from the `show` extension. On `show:upload` it records the per-drone parameter changes uploaded alongside the trajectory - each is a show time, a parameter name and a value, which is how LQR gains are switched partway through a flight. On `show:clock_changed` it cancels and reschedules those pending changes against the new clock. On `show:start` it notifies the subscribed ports so that external scripts can start in step with the drones.
 
-**TODO - writing a how-to-use style guide at the bottom, to complete this how-to-develop guide**
-- crazyradio dongle setup
-- flashing skybrush compatible drone firmware
-- setting up motive
-- download and use skybrush live
-- optitrack connection
-- check drone position before takeoff
-- server web ui at `http://localhost:5000/app/`
-- walkthrough of launching a skyc show 
-- waltkhrough of sending a drone commands using the aimotionlab extension
+#### Using the DroneHandler class
+
+The functionality offered by Skybrush Live is limited to interactions offered by the UI. Using [cflib](https://github.com/bitcraze/crazyflie-lib-python), it's possible to communicate with the drones from script, rather than UI, but that cuts the Skybrush server out of the picture. Using the aimotionlab extension's DroneHandler class, and the TCP server that establishes the drone handlers, one can reach the drones via the skybrush server. The TCP port's client side interface does not require flockwave at al, only a socket. This subsection describes the `drone` port from the client's side: its port can be checked in the `tcp_ports` section of `skybrushd.jsonc`.
+`Dummy_Server.py` in the repository root serves this same protocol on the same ports, with no drones, no radio and no `flockwave` imports: it performs the handshake, accepts every command described below, replies exactly as the real server would, and prints what it would have done. Run it from the repository root, and stop the real server first - they bind the same ports.
+
+To get a drone handler, open a TCP connection to the port and send `REQ_<drone id>` as UTF-8 text, as in "I'm requesting a handler to this drone". The server answers either with `ACK_<drone id>` if the drone is available (exists and has no handler), or `ACK_00` to signal that the request cannot be satisfied. Should a handler be established, commands can be dispatched to it on the tcp socket. Every command is a single byte string, which may include an argument if the command expects one:
+
+```
+CMDSTART_<command>[_<argument>]_EOF
+```
+
+These are the entries of `tcp_command_dict` ([drone_handler.py:305](src/flockwave/server/ext/aimotionlab/drone_handler.py#L305)):
+- `takeoff`, with an argument specifying takeoff height
+- `land`, no argument
+- `hover`, no argument: stops the current trajectory being executed and initiates a long (300s) hover
+- `upload`, with the trajectory as a raw JSON as argument: uploads the trajectory to the drone's memory, but does not start the traversal. The trajectory might be large enough to not fit in a single TCP fragent: the server will keep reading TCP fragments until it identifies the `EOF` matching the `CMDSTART`.
+- `start`, with abs(olute) or rel(ative) as argument: starts traversing the last uploaded trajectory. The argument decides whether the trajectory is considered relative to the current position, or absolute in world coordinates
+- `param`, the argument is a UTF-8 text shaped `name=value`, where `name` denotes which crazyflie [parameter](https://www.bitcraze.io/documentation/repository/crazyflie-firmware/master/userguides/logparam/), to set, and `value` denotes the value to set it to.
+
+Successful commands return an ACK message, no response indicates that the handler crashed (meaning that ACKs should be awaited with a timeout).
+
+**A minimal client.** Nothing more than this is required to command a drone:
+
+```python
+import trio
+
+async def main():
+    stream = await trio.open_tcp_stream("127.0.0.1", 6000)
+    await stream.send_all(b"REQ_07")
+    if await stream.receive_some() != b"ACK_07":
+        raise RuntimeError("no handler for drone 07")
+    await stream.send_all(b"CMDSTART_takeoff_0.5000_EOF")
+    print(await stream.receive_some())   # b'ACK', or the socket closes
+
+trio.run(main)
+```
+
+### Shows with Skybrush Live
+
+A drone show is a set of predefined drone trajectories (and, optionally, lights) bundled together with metadata, defined by a skyc file (a .skyc extension file, which is *actually* a .zip file, meaning you can open it with winrar, 7zip, file roller, etc.). The default use case for our drones is flying them through a skyc defined drone show. 
+
+#### What you need to set up before running a drone show:
+1. Skybrush server installed.
+2. [Skybrush Live](https://skybrush.io/modules/live/) installed.
+3. [Crazyradio PA](https://www.bitcraze.io/products/crazyradio-pa/) or [Crazyradio 2.0](https://www.bitcraze.io/products/crazyradio-2-0/), to communicate with the drones using [CRTP protocol](https://www.bitcraze.io/documentation/repository/crazyflie-firmware/master/functional-areas/crtp/). Note that you'll need to [setup USB permissions on Linux](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/installation/usb_permissions/), or [install the USB driver on Windows](https://www.bitcraze.io/documentation/repository/crazyradio-firmware/master/building/usbwindows/). 
+4. You'll need drones to fly. The lab uses [crazyflie drones](https://www.bitcraze.io/products/crazyflie-2-1-plus/), which need [skybrush compatible firmware](https://github.com/AIMotionLab-SZTAKI/crazyflie-firmware), and must be configured to match the channel and bitrate of the Crazyradio you're using. This can be done using  [cfclient](https://www.bitcraze.io/documentation/repository/crazyflie-clients-python/master/userguides/userguide_client/), which you might want to install anyway, since it offers helpful diagnostic options regarding crazyflie drones.
+5. [OptiTrack camera system](https://www.optitrack.com/) set up.
+6. [Motive (2.3.7) ](https://docs.optitrack.com/v2.3) up and running.
+7. In Motive, you need to turn on tracking for the rigid bodies belonging to the drones you'll be flying. Note that these rigid bodies should be defined such that they are not symmetric along any axies, and they aren't mirror images of each other, or can be rotated into one another (else Motive might confue them).
+8. The Skybrush server pc shall be **ethernet** connected to the network on which OptiTrack is streaming the motion capture data. 
+9. You'll need the actual skyc file that defines the show. In the lab, the main way of creating one is using the [skyc_utils](https://github.com/AIMotionLab-SZTAKI/skyc_utils) package.
+
+#### Launching a show
+1. Launch Motive, and check whether all the rigid bodies belonging to the drones you'll fly in the show are tracked, and not flickering.
+2. Launch Skybrush server with the skybrushd.jsonc config file: `poetry run skybrushd -c skybrushd.jsonc`. If there are any warnings, they should be addressed. Check the startup messages of the server: one of them should note that the libmotioncapture process was started, meaning the OptiTrack connection is working as intended:
+```bash
+[14:56:07]   server                 Starting Skybrush server 2.13.1
+           ✔ skybrush               Loaded configuration from '/home/gaalbotond/SZTAKI/skybrush-server/skybrushd.jsonc'
+[14:56:08]   logging                Storing logs in '/home/gaalbotond/.cache/Skybrush Server/log'
+             logging                Logging started
+             aimotionlab            The new extension is now running.
+             http_server            Starting HTTP server on localhost:5000
+             libmotionca            Using libmotioncapture connection
+           ✔ libmotionca lmc/0      Started libmotioncapture process for 'Mocap connection 0 (optitrack)'
+             crazyflie              Scanning Crazyflies from bradio://0/80/1M/E7E7E7E700 to ...3F
+```
+3. Launch Skybrush Live. Note the server's log saying a Client connected.
+4. Place the drones near their takeoff positions defined in the (skyc) show file. During the show setup, they will be assigned trajectories based on which takeoff position they are closest do. You don't need to nail them exactly, but aim for a decent approximation of the actual takeoff positions.
+5. Turn on the drones: if you did everything correctly, you should see them appear in Skybrush Live under the UAVs tab, indicating that the Crazyradio connection is functional. Check their Position and Heading: It should be stable, indicating that libmotioncapture connection to Motive is functional, and the cameras are calibrated properly.
+6. Set up the show: select the file, and setup the takeoff area. This is when mapping the trajectories to the physical drones happens. When all is set up, you may upload the show data, and choose a start time: doing so will start a 15-second countdown. When the countdown expires, the show is started.
+
+
 
