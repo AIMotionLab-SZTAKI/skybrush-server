@@ -58,6 +58,12 @@ class CrazyflieDronesExtension(UAVExtension[CrazyflieDriver]):
         driver.status_interval = float(configuration.get("status_interval", 0.5))
         driver.takeoff_altitude = float(configuration.get("takeoff_altitude", 1.0))
         driver.use_test_mode = bool(configuration.get("testing", False))
+        driver.variable_log_to_file = bool(
+            configuration.get("variable_log_to_file", True)
+        )
+        driver.variable_log_to_console = bool(
+            configuration.get("variable_log_to_console", False)
+        )
 
         controller_spec = configuration.get("controller")
         try:
@@ -391,6 +397,28 @@ schema = {
             ),
             "format": "checkbox",
             "propertyOrder": 2000,
+        },
+        "variable_log_to_file": {
+            "type": "boolean",
+            "title": "Save variable logs to file",
+            "description": (
+                "When enabled, selected Crazyflie log block variables are "
+                "appended to per-UAV CSV files."
+            ),
+            "default": True,
+            "format": "checkbox",
+            "propertyOrder": 2100,
+        },
+        "variable_log_to_console": {
+            "type": "boolean",
+            "title": "Print variable logs to console",
+            "description": (
+                "When enabled, selected Crazyflie log block variables are "
+                "printed to stdout."
+            ),
+            "default": False,
+            "format": "checkbox",
+            "propertyOrder": 2110,
         },
     }
 }

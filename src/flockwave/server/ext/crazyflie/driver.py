@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import struct
+import csv
+import time
 from collections import defaultdict
 from colour import Color
 from contextlib import asynccontextmanager, AsyncExitStack
@@ -114,6 +116,8 @@ class CrazyflieDriver(UAVDriver["CrazyflieUAV"]):
     status_interval: float = 0.5
     takeoff_altitude: float = 1
     use_test_mode: bool = False
+    variable_log_to_file: bool = True
+    variable_log_to_console: bool = False
 
     _cache_folder: Optional[str]
     _address_space_by_uav_id: Dict[str, Any]
@@ -144,6 +148,8 @@ class CrazyflieDriver(UAVDriver["CrazyflieUAV"]):
         self.id_format = id_format
         self.preferred_controller = None
         self.use_test_mode = False
+        self.variable_log_to_file = True
+        self.variable_log_to_console = False
 
         self._cache_folder = str(cache.resolve()) if cache else None
         self._address_space_by_uav_id = {}
@@ -580,6 +586,8 @@ class CrazyflieUAV(UAVBase):
         self._fence = None
         self._log_session = None
         self._last_uploaded_show = None
+        self._log_file = None
+        self._log_writer = None
 
         self._reset_status_variables()
 
@@ -1137,6 +1145,7 @@ class CrazyflieUAV(UAVBase):
                 finally:
                     self._log_session = None
         finally:
+            self._close_variable_log_file()
             self._fence = None
             self._crazyflie = None
 
@@ -1230,8 +1239,60 @@ class CrazyflieUAV(UAVBase):
         self._show_execution_stage = DroneShowExecutionStage.UNKNOWN
         self._velocity = VelocityXYZ()
 
-    def _print_log(self, message):
-        print(message.items)
+    def _close_variable_log_file(self) -> None:
+        if self._log_file is not None:
+            try:
+                self._log_file.close()
+            finally:
+                self._log_file = None
+                self._log_writer = None
+
+    def _init_variable_log_file(self, field_names: Sequence[str]) -> None:
+        if self._log_writer is not None:
+            return
+
+        if self.driver.cache_folder:
+            log_folder = Path(self.driver.cache_folder) / "variable_logs"
+        else:
+            log_folder = Path.cwd() / "logs" / "crazyflie"
+
+        log_folder.mkdir(parents=True, exist_ok=True)
+
+        safe_uav_id = str(self.id).replace("/", "_").replace(":", "_")
+        file_prefix = f"{safe_uav_id}_"
+        indices: List[int] = []
+        for existing_file in log_folder.glob(f"{file_prefix}*.csv"):
+            suffix = existing_file.stem[len(file_prefix) :]
+            if suffix.isdigit():
+                indices.append(int(suffix))
+
+        next_index = max(indices, default=-1) + 1
+        log_file_path = log_folder / f"{file_prefix}{next_index}.csv"
+        while log_file_path.exists():
+            next_index += 1
+            log_file_path = log_folder / f"{file_prefix}{next_index}.csv"
+
+        self._log_file = open(log_file_path, mode="w", newline="", encoding="utf-8")
+        self._log_writer = csv.writer(self._log_file)
+
+        self._log_writer.writerow(["timestamp", *field_names])
+        self._log_file.flush()
+
+        self.driver.log.info(
+            f"Logging Crazyflie variables to {log_file_path}", extra={"id": self.id}
+        )
+
+    def _handle_variable_log_message(
+        self, message, *, field_names: Sequence[str]
+    ) -> None:
+        values = list(message.items)
+
+        if self.driver.variable_log_to_console:
+            print(values)
+
+        if self.driver.variable_log_to_file and self._log_writer is not None:
+            self._log_writer.writerow([time.time(), *values])
+            self._log_file.flush()
 
 
     def _setup_logging_session(self) -> LogSession:
@@ -1240,38 +1301,50 @@ class CrazyflieUAV(UAVBase):
         """
         assert self._crazyflie is not None
 
+        field_names = (
+            # "ctrlBR.cmd_thrust",
+            # "ctrlBR.cmd_roll",
+            # "ctrlBR.cmd_pitch",
+            # "ctrlBR.cmd_yaw",
+            "yoyo.cmd_thrust",
+            "yoyo.cmd_roll",
+            "yoyo.cmd_pitch",
+            "yoyo.cmd_yaw",
+            # "motor.m1_rpm",
+            # "motor.m2_rpm",
+            # "motor.m3_rpm",
+            # "motor.m4_rpm",
+            # "motor.m1",
+            # "motor.m2",
+            # "motor.m3",
+            # "motor.m4",
+            # "pm.vbat",
+            # "powerDist.pwm0",
+            # "powerDist.pwm1",
+            # "powerDist.pwm2",
+            # "powerDist.pwm3",
+            # "ctrlINDI.m1f",
+            # "ctrlINDI.m2f",
+            # "ctrlINDI.m3f",
+            # "ctrlINDI.m4f",
+            # "ctrlINDI.wx_ref",
+            # "ctrlINDI.wy_ref",
+            # "stateEstimate.roll",
+            # "stateEstimate.pitch",
+            # "yoyo.pos_ref",
+            # "yoyo.vel_ref",
+            # "yoyo.acc_ref",
+            # "yoyo.status_ext",
+        )
+        if self.driver.variable_log_to_file:
+            self._init_variable_log_file(field_names)
 
         session = self._crazyflie.log.create_session()
         session.configure(graceful_cleanup=True)
-
-        return session
         session.create_block(
-            # "controller.rollRate",
-            # "controller.pitchRate",
-            # "controller.yawRate",
-            # "controller.rollRate_ext",
-            # "controller.pitchRate_ext",
-            # "controller.yawRate_ext",
-            # "controller.thrust_ext",
-            # "controller.actuatorThrust",
-            # "controller.ctr_roll",
-            # "load_pose.qy",
-            # "load_pose.qz",
-            # "load_pose.qw",
-            # "controller.ctr_roll",
-            # "controller.ctr_pitch",
-            # "controller.ctr_yaw",
-            # "controller.ctr_thrust",
-            # "ctrlLqr1Dof.cmd_pitch",
-            # "horizon.path_param",
-            # "horizon.point_0_x",
-            # "horizon.point_0_y",
-            # "horizon.point_0_z",
-            "Lqr2.alpha",
-            "Lqr2.beta",
-            "Lqr2.hook_control_on",
-            period=0.5,
-            handler=self._print_log,
+            *field_names,
+            period=0.1,
+            handler=partial(self._handle_variable_log_message, field_names=field_names),
         )
         return session
 
