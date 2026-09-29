@@ -21,7 +21,7 @@ class AiMotionMocapFrameHandler:
 
     async def notify_frame(self, frame: "MotionCaptureFrame", crazyflies: List[Crazyflie]):
         # Prefixes which we classify as non-UAV.
-        valid_prefixes = ['hook', 'test']
+        valid_prefixes = ['hook', 'test'] # should be added to config
         poses: List[Tuple[int, Tuple[float, float, float], QuaternionXYZW]] = []
         if self._compress:
             for item in frame.items:

@@ -1,4 +1,5 @@
 import trio
+import struct
 from typing import Tuple, Callable, Any, List, Optional, Dict, Union
 from trio import sleep, sleep_until
 import json
@@ -18,6 +19,17 @@ def log(text: str):
     print(f"{color}[{time.time() - start_time:.3f} LOG] {text}{reset}")
 
 
+# Mirror of the "memory_partitions" block of skybrushd.jsonc. There is no drone here to write to, so only the
+# partition IDs matter: they drive the same ping-pong between the two dynamic partitions that the real
+# DroneHandler performs. Keep in sync with skybrushd.jsonc.
+MEMORY_PARTITIONS: List[Dict[str, Any]] = [
+    {"ID": 0, "size": 100, "start": 1, "dynamic": False},
+    {"ID": 1, "size": 100, "start": 104, "dynamic": False},
+    {"ID": 2, "size": 3980, "start": 208, "dynamic": True},
+    {"ID": 3, "size": 3980, "start": 4200, "dynamic": True},
+]
+
+
 class DroneHandler:
     def __init__(self, uav_id: str, stream: trio.SocketStream, color):
         self.uav_id = uav_id
@@ -26,10 +38,23 @@ class DroneHandler:
         self.stream_data = b''
         self.traj = b''
         self.color = color
+        self.crashed = False
+        self.hover_defined = False
+        # The real handler asks its UAV object whether it is airborne. We have no UAV, so we track it ourselves,
+        # in order to accept and refuse the same commands the real handler would.
+        self.airborne = False
+        self.active_traj_ID: int = max(partition["ID"] for partition in MEMORY_PARTITIONS)
+        self.traj_ID_sum: int = sum(partition["ID"] for partition in MEMORY_PARTITIONS if partition["dynamic"])
+
+    def upcoming_traj(self):
+        return self.traj_ID_sum - self.active_traj_ID
 
     def print(self, text):
         reset_color = "\033[0m"
         print(f"{self.color}[drone_{self.uav_id}]: {text}{reset_color}")
+
+    def warning(self, text):
+        warning(f"[drone_{self.uav_id}]: {text}")
 
     def parse(self, raw_data: bytes, ) -> Tuple[Union[bytes, None], Union[bytes, None]]:
         data = raw_data.strip()
@@ -39,7 +64,12 @@ class DroneHandler:
         if data[0] != b'CMDSTART':
             return b'NO_CMDSTART', None
         command = data[1]
-        argument = data[2] if b'EOF' not in data[2] else None
+        if command not in self.tcp_command_dict:
+            return b'WRONG_CMD', None
+        if self.tcp_command_dict[command][1]:  # This is a boolean signifying whether we expect an argument
+            argument = data[2]
+        else:
+            argument = None
         return command, argument
 
     @staticmethod
@@ -61,7 +91,7 @@ class DroneHandler:
         # If the command was 'upload', then a json file must follow. If it doesn't (we can't find the beginning b'{'),
         # then the command or the file was corrupted.
         if start_index == -1:
-            warning("Corrupted trajectory file.")
+            self.warning("Corrupted trajectory file.")
         else:
             self.traj = self.stream_data[start_index:]
             self.transmission_active = True  # signal we're in the middle of transmission
@@ -72,51 +102,110 @@ class DroneHandler:
             self.print(f"Transmission of trajectory finished.")
 
     async def command(self, cmd: bytes, arg: bytes):
-        self.print(f"{cmd.decode('utf-8')} command received.")
-        await self.tcp_command_dict[cmd](self, arg)
+        self.print(f"Command received: {cmd.decode('utf-8')}")
+        await self.tcp_command_dict[cmd][0](self, arg)
+
+    async def define_hover(self):
+        # The real handler uploads hover.json to trajectory ID 1 here. There is nothing to upload it to, but we do
+        # read the file, so that a missing or broken hover.json fails here just like it would on the real server.
+        with open('./hover.json') as json_file:
+            json.load(json_file)
+        self.print("Defined fallback hover.")
+        self.hover_defined = True
 
     async def takeoff(self, arg: bytes):
         try:
-            arg = float(arg)
-            self.print(f"Takeoff command dispatched to drone.")
-            await sleep(0.01)
-            await self.stream.send_all(b'ACK')  # reply with an acknowledgement
+            height = float(arg)
+            if height < 0.1 or height > 1.5:
+                self.warning(f"Takeoff height {height}m is out of allowed range, taking off to 0.5m instead.")
+                height = 0.5
+            if self.airborne:
+                self.warning(f"Already airborne, takeoff command wasn't dispatched.")
+                self.crashed = True
+            else:
+                await sleep(0.01)
+                self.airborne = True
+                self.print(f"Takeoff command dispatched, height={height}")
+                await self.stream.send_all(b'ACK')  # reply with an acknowledgement
         except ValueError:
-            warning("Takeoff argument is not a float.")
+            self.warning("Takeoff argument is not a float.")
+            self.crashed = True
         except Exception as exc:
-            warning(f"drone{self.uav_id}: Couldn't take off because of this exception: {exc!r}. ")
+            self.warning(f"Couldn't take off because of this exception: {exc!r}. ")
+            self.crashed = True
 
     async def land(self, arg: bytes):
-        self.print(f"Land command dispatched..")
-        await self.stream.send_all(b'ACK')  # reply with an acknowledgement
+        if self.airborne:
+            self.airborne = False
+            self.print(f"Land command dispatched.")
+            await self.stream.send_all(b'ACK')  # reply with an acknowledgement
+        else:
+            self.warning(f"Already on the ground, land command wasn't dispatched.")
+            self.crashed = True
 
     async def upload(self, arg: bytes):
         await self.handle_transmission()
-        trajectory_data = json.loads(self.traj.decode('utf-8'))
-        f"Defined trajectory of length {trajectory_data.get('landingTime')} sec for drone {self.uav_id}"
-        # await sleep(0.5)
+        try:
+            trajectory_data = json.loads(self.traj.decode('utf-8'))
+        except Exception as exc:
+            self.warning(f"Trajectory couldn't be written: {exc!r}")
+            await self.stream.send_all(b'ERR')  # reply with error message
+            self.airborne = False  # the real handler lands the drone at this point
+            self.crashed = True
+            return
+        traj_type = trajectory_data.get("type", "COMPRESSED")
+        # The real handler encodes the trajectory and refuses it if it does not fit into its memory partition.
+        # We cannot measure the encoded size without the server's encoder, so an upload never fails on size here.
+        self.print(f"Defined {traj_type} trajectory on ID {self.upcoming_traj()} "
+                   f"(currently active ID is {self.active_traj_ID}).")
         await self.stream.send_all(b'ACK')  # reply with an acknowledgement
 
     async def start(self, arg: bytes):
         is_valid, is_relative = self.get_traj_type(self, arg=arg)
         if is_valid:
-            self.print(f"Started {'relative' if is_relative else 'absolute'} trajectory.")
+            self.print(f"Started {'relative' if is_relative else 'absolute'} trajectory "
+                       f"on ID {self.upcoming_traj()}.")
+            # We are now playing the trajectory with the new ID: adjust the active ID accordingly.
+            self.active_traj_ID = self.upcoming_traj()
             await self.stream.send_all(b'ACK')  # reply with an acknowledgement
+        else:
+            self.warning(f"Invalid trajectory type: {arg!r}")
+            self.crashed = True
 
     async def hover(self, arg: bytes):
-        self.print(f"Hover command dispatched.")
-        await self.stream.send_all(b'ACK')  # reply with an acknowledgement
+        if not self.hover_defined:
+            await self.define_hover()
+        if self.airborne:
+            self.print(f"Hover command dispatched.")
+            await self.stream.send_all(b'ACK')  # reply with an acknowledgement
+        else:
+            self.warning(f"Drone is on the ground, if you want to do a takeoff, do so from Live")
+            self.crashed = True
 
-    tcp_command_dict: Dict[bytes, Callable] = {
-        b"takeoff": takeoff,
-        b"land": land,
-        b"upload": upload,
-        b"hover": hover,
-        b"start": start
+    async def set_param(self, arg: bytes):
+        # arg should look something like this: b'stabilizer.controller=1'
+        try:
+            param, value = arg.split(b'=')
+            param = param.decode()
+            value = float(value)
+            self.print(f"Set {param} to {value}")
+        except Exception as exc:
+            self.warning(f"Exception while setting parameter: {exc!r}")
+        # failure to set a parameter usually doesn't result in catastrophic failure so reply anyway
+        await self.stream.send_all(b'ACK')
+
+    tcp_command_dict: Dict[
+        bytes, Tuple[Callable[[Any, bytes], None], bool]] = {
+        b"takeoff": (takeoff, True),
+        b"land": (land, False),
+        b"upload": (upload, True),
+        b"hover": (hover, False),
+        b"start": (start, True),
+        b"param": (set_param, True)
     }
 
     async def listen(self):
-        while True:
+        while not self.crashed:
             if not self.transmission_active:
                 try:
                     self.stream_data: bytes = await self.stream.receive_some()
@@ -124,15 +213,18 @@ class DroneHandler:
                         break
                     cmd, arg = self.parse(self.stream_data)
                     if cmd == b'NO_CMDSTART':
-                        self.print(f"Command is missing standard CMDSTART.")
+                        self.print(f"Command is missing standard CMDSTART")
+                        break
+                    elif cmd == b'WRONG_CMD':
+                        self.print(f"Command is not found in server side dictionary")
                         break
                     elif cmd is None:
-                        warning(f"{self.uav_id}: None-type command.")
+                        self.warning(f"None-type command.")
                         break
                     else:
                         await self.command(cmd, arg)
                 except Exception as exc:
-                    warning(f"drone{self.uav_id}: TCP handler crashed: {exc!r}")
+                    self.warning(f"TCP handler crashed: {exc!r}")
                     break
 
 
@@ -194,7 +286,10 @@ car_streams: List[trio.SocketStream] = []
 simulation_streams: List[trio.SocketStream] = []
 start_time = time.time()
 log("DUMMY SERVER READY! :)")
-PORT = 7000
+# Same port numbers as the "tcp_ports" block of skybrushd.jsonc, so that client scripts need no edits when they
+# are pointed at the dummy server. This does mean that the two cannot run at the same time. The "lqr" port (6003)
+# is not served here: its handler streams log variables from a real drone, which cannot be faked usefully.
+PORT = 6000
 colors = {"04": "\033[92m",
           "06": "\033[93m",
           "07": "\033[94m",
@@ -215,12 +310,13 @@ async def TCP_parent():
         while start != "start":
             start = await trio.to_thread.run_sync(input, 'Type "start" to simulate a skyc start!\n')
         try:
+            # The same notifications the aimotionlab extension registers in its configure() method.
             for stream in car_streams:
                 print("STARTING CAR WROOM WROOM")
-                await stream.send_all(b'6')
+                await stream.send_all(struct.pack("f", 5.5))
             for stream in simulation_streams:
                 print("START SIMULATION!")
-                await stream.send_all(b'00_CMDSTART_show_EOF')
+                await stream.send_all(b'START')
         except Exception as exc:
             print(f"Exception: {exc!r}")
 trio.run(TCP_parent)
