@@ -1,0 +1,74 @@
+{
+  "EXTENSIONS": {
+    "crazyflie": {
+      "connections": [
+        "crazyradio://0/60/1M/E7E7E7E7"//,
+//        "crazyradio://1/90/1M/E7E7E7E7"
+      ],
+      "enabled": true
+      // "controller": "mellinger" this is how we would give a preferred controller for a show :)
+    },
+    "aimotionlab": {
+      "channel": 1,
+      "cf_crtp_port": 1,
+      "tcp_ports": {
+        "drone":  6000,
+        "car":  6001,
+        "sim":  6002,
+        "lqr":  6003
+      },
+      "enabled": true,
+      "memory_partitions": [
+        {
+          "ID": 0,
+          "size": 100,
+          "start": 1,
+          "dynamic": false
+        },
+        {
+          "ID": 1,
+          "size": 100,
+          "start": 104,
+          "dynamic": false
+        },
+        {
+          "ID": 2,
+          "size": 3980,
+          "start": 208,
+          "dynamic": true
+        },
+        {
+          "ID": 3,
+          "size": 3980,
+          "start": 4200,
+          "dynamic": true
+        }
+      ]
+    },
+    "libmotioncapture": {
+      "connections": [
+        {
+          "hostname": "192.168.2.141",
+          "type": "optitrack"
+        }
+      ],
+      "enabled": true
+    },
+    "motion_capture": {
+      "enabled": true,
+      "frame_rate": 30,
+      "mapping": {
+        "rules": [
+          {
+            "type": "strip_prefix",
+            "value": "cf"
+          },
+          {
+            "type": "strip_prefix",
+            "value": "bb"
+          }
+        ]
+      }
+    }
+  }
+}
