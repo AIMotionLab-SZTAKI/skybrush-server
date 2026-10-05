@@ -279,16 +279,84 @@ async def establish_drone_handler(stream: trio.SocketStream, *, handlers: List[D
         await stream.send_all(b'ACK_00')
         return
 
+async def stream_mpc(stream: trio.SocketStream, *, sessions: List[str]):
+    # Mirror of MpcSession in src/flockwave/server/ext/aimotionlab/mpc_relay.py: same handshake and frames, but
+    # instead of forwarding the frames to a drone, we print their rate and the latest command once per second.
+    frame_format = "<BBffffff"
+    frame_size = struct.calcsize(frame_format)
+    request = (await stream.receive_some()).decode("utf-8", errors="replace").strip()
+    parts = request.split("_")
+    policy = parts[2].lower() if len(parts) > 2 else "land"
+    # Numeric IDs match regardless of leading zeros, like on the real server: "8" finds "08"
+    uav_id = None
+    if len(parts) >= 2:
+        uav_id = next((i for i in uav_ids if i == parts[1] or (parts[1].isdigit() and int(i) == int(parts[1]))),
+                      None)
+    if parts[0] != "REQ" or uav_id is None or uav_id in sessions or policy not in ("land", "hover", "none"):
+        warning(f"MPC port: refused request {request!r}")
+        await stream.send_all(b'ACK_00')
+        return
+    sessions.append(uav_id)
+    log(f"MPC client connected to drone {uav_id}, end of session policy: {policy} {parts[3:]}")
+    await stream.send_all(f"ACK_{uav_id}".encode('utf-8'))
+    buffer = bytearray()
+    received = 0
+    count_since_print = 0
+    last_print = time.time()
+    latest = None
+    reason = "client disconnected"
+    try:
+        while True:
+            with trio.move_on_after(0.25 if received else float("inf")) as scope:
+                data = await stream.receive_some()
+            if scope.cancelled_caught:
+                reason = "no frame for 250 ms"
+                break
+            if not data:
+                break
+            buffer += data
+            while buffer:
+                if buffer[0] == 0:
+                    reason = "end of session requested"
+                    break
+                if buffer[0] != 20:
+                    reason = f"invalid frame type {buffer[0]}"
+                    break
+                if len(buffer) < frame_size:
+                    break
+                latest = struct.unpack(frame_format, buffer[:frame_size])
+                del buffer[:frame_size]
+                received += 1
+                count_since_print += 1
+            if buffer and buffer[0] != 20:
+                break
+            if time.time() - last_print >= 1.0 and latest is not None:
+                _, status, thrust, roll, pitch, yaw, com_x, com_y = latest
+                print(f"[drone_{uav_id} MPC] {count_since_print / (time.time() - last_print):.1f} Hz, "
+                      f"status={status} thrust={thrust:.3f} N rates=({roll:.1f}, {pitch:.1f}, {yaw:.1f}) deg/s "
+                      f"com=({com_x:.3f}, {com_y:.3f})")
+                count_since_print = 0
+                last_print = time.time()
+    except trio.BrokenResourceError:
+        reason = "connection lost"
+    finally:
+        sessions.remove(uav_id)
+    action = "nothing" if policy == "none" or received == 0 else f"notify setpoints stop, then {policy}"
+    log(f"MPC session of drone {uav_id} ended ({reason}) after {received} frames, would do: {action}")
+
+
 uav_ids = ["04", "06", "07", "08", "09"]
 uav_ids = uav_ids + [str(i) for i in range(10, 99)]
 handlers: List[DroneHandler] = []
 car_streams: List[trio.SocketStream] = []
 simulation_streams: List[trio.SocketStream] = []
+mpc_sessions: List[str] = []
 start_time = time.time()
 log("DUMMY SERVER READY! :)")
 # Same port numbers as the "tcp_ports" block of skybrushd.jsonc, so that client scripts need no edits when they
 # are pointed at the dummy server. This does mean that the two cannot run at the same time. The "lqr" port (6003)
-# is not served here: its handler streams log variables from a real drone, which cannot be faked usefully.
+# is not served here: its handler streams log variables from a real drone, which cannot be faked usefully. The "mpc"
+# port (6004) decodes and prints the streamed commands.
 PORT = 6000
 colors = {"04": "\033[92m",
           "06": "\033[93m",
@@ -298,7 +366,8 @@ colors = {"04": "\033[92m",
 
 ports: List[Tuple[int, Callable]] = [(PORT, partial(establish_drone_handler, handlers=handlers)),
                                      (PORT+1, partial(listen_and_broadcast, port=PORT+1, streams=car_streams)),
-                                     (PORT + 2, partial(listen_and_broadcast, port=PORT+2, streams=simulation_streams))]
+                                     (PORT + 2, partial(listen_and_broadcast, port=PORT+2, streams=simulation_streams)),
+                                     (PORT + 4, partial(stream_mpc, sessions=mpc_sessions))]
 
 async def TCP_parent():
     async with trio.open_nursery() as nursery:

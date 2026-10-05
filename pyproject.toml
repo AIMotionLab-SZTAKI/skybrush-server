@@ -26,7 +26,7 @@ priority = "supplemental"
 [tool.poetry.dependencies]
 # Upper bound: the locked motioncapture and numpy versions publish
 # no wheels above CPython 3.11. 
-python = ">=3.9,<3.12"
+python = ">=3.9,<4.0"
 bidict = ">=0.22.1"
 click = "^8.1.7"
 blinker = "^1.7.0"
@@ -64,8 +64,8 @@ adrenaline = "^2.0.0"
 httpx = ">=0.26.0"
 igrf-model = "^1.1.3"
 deprecated = "^1.2.14"
-motioncapture = "1.0a2"
-numpy = "^1.23.1"
+motioncapture = "1.0a4"
+numpy = ">=1.26"
 scipy = "^1"
 
 [tool.poetry.group.dev.dependencies]

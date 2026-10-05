@@ -737,7 +737,7 @@ This is the lab's own extension, and the main reason this fork exists. It declar
 
 **Sending the poses of passive objects to the drones.** `crazyflie` already gives each drone its own pose; `aimotionlab` additionally forwards the poses of tracked objects that are *not* drones, for control purposes. Its frame handler picks out items whose names begin with `hook` or `test`, packs them into a CRTP external-pose packet, and sends it to the Crazyflies on the port and channel given by `cf_crtp_port` and `channel`, to let the drones know about payload/obstacle/hook pose.
 
-**TCP ports for external scripts.** The aimotionlab extension also serves as a TCP server: the `tcp_ports` config block currently names four ports, each served by a different handler. These handlers are functions dispatched once for each client connection on that TCP port, typically long running functions that only exit when the client disconnects. These functions let scripts outside the server interact with the server, or the drones, or each other with the server as a broker (broadcast channel). 
+**TCP ports for external scripts.** The aimotionlab extension also serves as a TCP server: the `tcp_ports` config block currently names five ports, each served by a different handler. These handlers are functions dispatched once for each client connection on that TCP port, typically long running functions that only exit when the client disconnects. These functions let scripts outside the server interact with the server, or the drones, or each other with the server as a broker (broadcast channel). 
 
 | Name | Purpose |
 | --- | --- |
@@ -745,6 +745,7 @@ This is the lab's own extension, and the main reason this fork exists. It declar
 | `car` | broadcast channel, also notified when a show starts |
 | `sim` | broadcast channel, also notified when a show starts |
 | `lqr` | streams LQR parameters to a drone, and its trajectory timestamp back |
+| `mpc` | streams body rate + thrust commands (e.g. from an off-board MPC) to a drone, see [Streaming MPC commands](#streaming-mpc-commands) |
 
 **The drone command protocol.** `DroneHandler` implements the commands a connected script may send over the `drone` port: `takeoff`, `land`, `hover`, `upload`, `start` and `set_param`. Uploading writes a trajectory into the Crazyflie's memory, which is where the `memory_partitions` configuration comes in: it carves that memory into numbered regions. Memory partitions marked as `dynamic` take part in on-the-fly trajectory upload: a trajectory being executed shouldn't be overwritten, therefore, we use two partitions to do this. One partition contains the trajectory being executed, the other can be freely written to. Note that server checks that a trajectory fits the partition it is given, but not whether the partitions themselves overlap - writing a sensible, non-overlapping config is the responsibility of whoever writes `skybrushd.jsonc`.
 
@@ -786,6 +787,32 @@ async def main():
 
 trio.run(main)
 ```
+
+#### Streaming MPC commands
+
+The `mpc` port relays body rate + thrust commands from an off-board controller to one drone, at the rate the client sends them (tested at 100 Hz). Each command is a 26-byte frame that the server forwards unchanged as a CRTP generic setpoint of type 20. The firmware (bumblebee and Crazyflie, `Bodyrate` controller) follows the commands while they arrive, and flies the high-level commander with a fallback position controller otherwise. So the drone can take off, hover and land from Skybrush Live or a `DroneHandler` before and after the MPC session. The protocol is documented in [mpc_relay.py](src/flockwave/server/ext/aimotionlab/mpc_relay.py). [Client/mpc_client.py](Client/mpc_client.py) is a ready-made client to import from your MPC code:
+
+```python
+from mpc_client import MpcClient
+
+with MpcClient("07", policy="land", policy_arg=0.3) as mpc:
+    while running:
+        mpc.send(thrust_N, roll_rate, pitch_rate, yaw_rate)  # deg/s: roll = p, pitch = -q, yaw = r
+```
+
+The policy, chosen when connecting, decides what the server does when the session ends (the client leaves the `with` block, crashes, or sends nothing for 250 ms). `policy_arg` is the policy's single numeric argument; it is appended to the request (`REQ_07_land_0.3`), and if left out, the server uses the default:
+
+| `policy` | `policy_arg` | default |
+|---|---|---|
+| `land` | descent velocity [m/s] | 0.5 |
+| `hover` | time to hover in place before landing [s] | 2.0 |
+| `none` | unused: the server does nothing | — |
+
+In every case except `none`, the server first hands the drone back to the high-level commander. If the commands stop without that handover, e.g. because the radio link or the server is lost, the firmware lands the drone by itself after `bodyrate.mpc_timeout` ms, and ignores MPC commands until the drone is on the ground.
+
+Firmware parameters (group `bodyrate`): the drone must fly the `Bodyrate` controller (`stabilizer.controller` = 10 on the bumblebee, 6 on the Crazyflie). On the bumblebee, `input_src` must also be set to 1 (0 is the UART input from the Raspberry Pi). `fallback` selects the controller that flies when no MPC command is coming in (5: Geometric, the bumblebee's default; 1: PID, the Crazyflie's default). `mpc_timeout` [ms] and `mpc_land_vel` [m/s] set the firmware's own landing. The log group `ctrlMpc` shows the state (0: fallback, 1: MPC, 2: aborted), the number of commands received, and the last command.
+
+[Client/dummy_mpc.py](Client/dummy_mpc.py) is a stand-in for the MPC: an off-board position controller with the same outputs, for testing the chain. `--sim --no-server` runs it against a simulated drone without anything else. `Dummy_Server.py` also serves the `mpc` port and prints the rate and content of the received commands.
 
 ### Shows with Skybrush Live
 

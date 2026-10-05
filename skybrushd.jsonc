@@ -2,7 +2,7 @@
   "EXTENSIONS": {
     "crazyflie": {
       "connections": [
-        "crazyradio://0/80/1M/E7E7E7E7"
+        "crazyradio://0/80/2M/E7E7E7E7"
         //"crazyradio://1/90/1M/E7E7E7E7"
       ],
       "enabled": true
@@ -15,7 +15,8 @@
         "drone":  6000,
         "car":  6001,
         "sim":  6002,
-        "lqr":  6003
+        "lqr":  6003,
+        "mpc":  6004
       },
       "enabled": true,
       "memory_partitions": [
