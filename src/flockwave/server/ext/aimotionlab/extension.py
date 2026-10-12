@@ -14,7 +14,7 @@ from aiocflib.crazyflie import Crazyflie
 from aiocflib.crazyflie.log import LogMessage, LogSession
 from .frame_handler import AiMotionMocapFrameHandler
 from .drone_handler import DroneHandler
-from .mpc_relay import MpcSession, parse_mpc_request, resolve_uav_id
+from .mpc_relay import MpcSession, parse_mpc_request, resolve_uav_id, split_mpc_options
 from typing import Dict, Callable, Union, Tuple, Any, List, Optional
 from flockwave.server.ext.show.clock import ShowClock
 from flockwave.server.tasks import wait_until
@@ -263,6 +263,7 @@ class aimotionlab(Extension):
         protocol."""
         request = (await stream.receive_some()).decode("utf-8", errors="replace")
         try:
+            request, log_hz = split_mpc_options(request)
             uav_id, policy, policy_arg = parse_mpc_request(request)
         except ValueError as exc:
             self.log.warning(f"MPC port: {exc}")
@@ -280,14 +281,15 @@ class aimotionlab(Extension):
             return
         try:
             uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
-            session = MpcSession(uav, stream, self.log, policy, policy_arg)
+            session = MpcSession(uav, stream, self.log, policy, policy_arg, log_hz)
         except (KeyError, RuntimeError) as exc:  # RuntimeError: the drone is in the registry but not connected
             self.log.warning(f"Drone {uav_id} is not available for MPC streaming: {exc!r}")
             await stream.send_all(b"ACK_00")
             return
         self.mpc_sessions[uav_id] = session
         try:
-            self.log.info(f"MPC client connected to drone {uav_id}, end of session policy: {policy}.")
+            self.log.info(f"MPC client connected to drone {uav_id}, end of session policy: {policy}"
+                          + (f", onboard log at {log_hz:g} Hz." if log_hz else "."))
             await stream.send_all(f"ACK_{uav_id}".encode("utf-8"))
             await session.run()
         finally:
