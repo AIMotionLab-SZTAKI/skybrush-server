@@ -11,6 +11,7 @@ from flockwave.server.ext.aimotionlab.mpc_relay import (
     MPC_FRAME_SIZE,
     MPC_FRAME_SIZES,
     MPC_LOG_BLOCKS,
+    MPC_LOG_PROFILES,
     split_mpc_options,
     MpcSession,
     parse_mpc_request,
@@ -113,7 +114,8 @@ class FakeUAV:
         self.cf.calls.append(("land", velocity))
 
     async def get_parameter(self, name, fetch=False):
-        assert name == "bodyrate.mpc_rx"
+        if name != "mpcin.rx":
+            raise KeyError(name)  # older firmware names are tried only if this one is missing
         # Pretend the firmware consumed every packet sent on the setpoint channel
         return len([p for p in self.cf.packets if p[:2] == (7, 0)])
 
@@ -237,18 +239,23 @@ async def test_unknown_frame_type_ends_session():
 
 
 def test_split_mpc_options():
-    assert split_mpc_options("REQ_07_land_0.3") == ("REQ_07_land_0.3", None)
-    assert split_mpc_options("REQ_07_land_0.3_log") == ("REQ_07_land_0.3", 50.0)
-    assert split_mpc_options("REQ_07_log100") == ("REQ_07", 100.0)
-    for bad in ("REQ_07_logx", "REQ_07_log0", "REQ_07_log500"):
+    assert split_mpc_options("REQ_07_land_0.3") == ("REQ_07_land_0.3", None, None)
+    assert split_mpc_options("REQ_07_land_0.3_log") == ("REQ_07_land_0.3", 50.0, "mpc")
+    assert split_mpc_options("REQ_07_log100") == ("REQ_07", 100.0, "mpc")
+    assert split_mpc_options("REQ_07_land_0.3_log50:indi") == ("REQ_07_land_0.3", 50.0, "indi")
+    assert split_mpc_options("REQ_07_log:indi") == ("REQ_07", 50.0, "indi")
+    for bad in ("REQ_07_logx", "REQ_07_log0", "REQ_07_log500", "REQ_07_log50:nope"):
         with raises(ValueError):
             split_mpc_options(bad)
 
 
 def test_log_blocks_fit_log_packets():
-    sizes = {"ctrlMpc.type": 1, "ctrlMpc.state": 1}  # uint8; all others are float or uint32 (4 bytes)
-    for variables in MPC_LOG_BLOCKS.values():
-        assert sum(sizes.get(v, 4) for v in variables) <= 28
+    sizes = {"ctrlMpc.type": 1, "ctrlMpc.state": 1, "indi.mode": 1}  # uint8; others float / uint32 (4 bytes)
+    names = [name for blocks in MPC_LOG_PROFILES.values() for name in blocks]
+    assert len(names) == len(set(names))
+    for blocks in MPC_LOG_PROFILES.values():
+        for variables in blocks.values():
+            assert sum(sizes.get(v, 4) for v in variables) <= 26  # firmware LOG_MAX_LEN
 
 
 async def read_lines(stream, into):
@@ -307,3 +314,21 @@ async def test_log_failure_does_not_end_the_session():
 
     assert len(records) == 1 and "error" in records[0]
     assert [p[2] for p in cf.packets if p[:2] == (7, 0)] == [frame(1), frame(2)]
+
+
+async def test_indi_log_profile_streams_its_blocks():
+    cf = FakeCrazyflie()
+    client, server = memory_stream_pair()
+    session = MpcSession(FakeUAV(cf), server, log, "none", None, log_hz=50.0, log_profile="indi")
+    records = []
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(session.run)
+        nursery.start_soon(read_lines, client, records)
+        await client.send_all(frame(1))
+        await trio.sleep(0.05)
+        await client.send_all(b"\x00")
+        await trio.sleep(0.05)
+        await client.aclose()
+
+    assert {r["block"] for r in records} == set(MPC_LOG_PROFILES["indi"])
+    assert "indi.u1" in next(r for r in records if r["block"] == "i1")

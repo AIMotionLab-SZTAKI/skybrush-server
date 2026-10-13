@@ -22,9 +22,9 @@ Protocol, from the client's side:
      CRTP packet.
 4. To end the session, either send the single byte ``0x00``, or close the connection.
 
-Onboard log (optional): append ``_log`` (50 Hz) or ``_log<Hz>`` to the request, e.g. ``REQ_07_land_0.3_log100``.
-During the session the server then streams the MPC log variables of the firmware (``MPC_LOG_BLOCKS``) back to the
-client as JSON lines, one per received log packet: ``{"block": "a", "t_fw": <firmware ms>, "t_srv": <server unix
+Onboard log (optional): append ``_log[<Hz>][:<profile>]`` to the request, e.g. ``REQ_07_land_0.3_log100`` or
+``REQ_07_land_0.3_log50:indi`` (default 50 Hz, profile ``mpc``). During the session the server then streams the log
+variables of the profile (``MPC_LOG_PROFILES``) back to the client as JSON lines, one per received log packet: ``{"block": "a", "t_fw": <firmware ms>, "t_srv": <server unix
 time>, "<variable>": <value>, ...}``. If the variables cannot be logged (e.g. older firmware), a single
 ``{"error": "..."}`` line is sent and the session continues without logging. Clients that do not ask for the log
 receive nothing after the ACK.
@@ -46,7 +46,7 @@ from aiocflib.crazyflie import Crazyflie
 from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
 
 __all__ = ("MpcSession", "parse_mpc_request", "split_mpc_options", "resolve_uav_id", "MPC_FRAME_SIZE",
-           "MPC_FRAME_SIZES", "MPC_LOG_BLOCKS")
+           "MPC_FRAME_SIZES", "MPC_LOG_BLOCKS", "MPC_LOG_PROFILES")
 
 MPC_SETPOINT_TYPE = 20
 """Generic setpoint type of the body rate MPC command, see crtp_commander_generic.c in the firmware."""
@@ -70,21 +70,39 @@ SET_SETPOINT_CHANNEL = 0
 META_COMMAND_CHANNEL = 1
 META_NOTIFY_SETPOINTS_STOP = 0
 
-RX_COUNTER_PARAMETER = "bodyrate.mpc_rx"
-"""Read-only firmware parameter counting the MPC commands the controller consumed."""
+RX_COUNTER_PARAMETERS = ("mpcin.rx", "bodyrate.mpc_rx")
+"""Read-only firmware parameter counting the MPC commands the controller consumed; the first one the firmware has
+(bodyrate.mpc_rx in firmware before the shared MPC input module)."""
 
 STREAM_TIMEOUT = 0.25
 """If no frame arrives for this long (after the first one), the session is ended."""
 
-MPC_LOG_BLOCKS = {
-    # Each block must fit into one log packet (28 bytes)
-    "a": ("ctrlMpc.type", "ctrlMpc.state", "ctrlMpc.thrust", "ctrlMpc.roll", "ctrlMpc.pitch", "ctrlMpc.yaw",
-          "ctrlMpc.aff_x", "ctrlMpc.aff_y"),
-    "b": ("ctrlMpc.aff_z", "gyro.x", "gyro.y", "gyro.z", "ctrlMpc.rx"),
+MPC_LOG_PROFILES = {
+    # Each block must fit into one log block of the firmware: LOG_MAX_LEN = 26 bytes in log.c (aiocflib only checks
+    # 28). Block names are unique across profiles.
+    "mpc": {
+        # What the firmware received (bumblebee-firmware mpc_input.c): command echo and latency checks
+        "a": ("ctrlMpc.type", "ctrlMpc.state", "ctrlMpc.thrust", "ctrlMpc.roll", "ctrlMpc.pitch", "ctrlMpc.yaw",
+              "ctrlMpc.aff_x", "ctrlMpc.aff_y"),
+        "b": ("ctrlMpc.aff_z", "gyro.x", "gyro.y", "gyro.z", "ctrlMpc.rx"),
+    },
+    "indi": {
+        # The onboard INDI (controller_indi.c), for INDI flights
+        # The commanded torque is not logged: it is G1 u of the logged rotor commands (after saturation)
+        "i1": ("indi.mode", "ctrlMpc.state", "indi.rpm_inv", "indi.u1", "indi.u2", "indi.u3", "indi.u4", "indi.tf_z"),
+        "i2": ("indi.wr_x", "indi.wr_y", "indi.wr_z", "indi.wf_x", "indi.wf_y", "indi.wf_z"),
+        "i3": ("indi.a_x", "indi.a_y", "indi.a_z", "indi.tf_x", "indi.tf_y"),
+    },
 }
-"""Log blocks streamed back to clients that ask for the onboard log (see bumblebee-firmware controller_body_rate.c).
-ctrlMpc.roll/pitch/yaw is the rate setpoint in use (deg/s, pitch inverted), aff_* the type 21 angular acceleration
-feedforward (rad/s^2, FLU), gyro.* in deg/s."""
+"""Log blocks streamed back to clients that ask for the onboard log. mpc: ctrlMpc.roll/pitch/yaw is the received
+rate setpoint (deg/s, pitch inverted), aff_* the type 21 angular acceleration feedforward (rad/s^2, FLU), gyro.* in
+deg/s. indi: Omega_ref after propagation (wr), filtered rate (wf), commanded angular acceleration (a), torque of the
+measured rotor speeds (tf), rotor thrust commands u1..u4 [N], all SI and FLU."""
+
+MPC_LOG_BLOCKS = MPC_LOG_PROFILES["mpc"]
+"""The default profile."""
+
+DEFAULT_LOG_PROFILE = "mpc"
 
 DEFAULT_LOG_RATE = 50.0
 """Onboard log rate [Hz] for a plain ``_log`` request option."""
@@ -106,20 +124,23 @@ def parse_mpc_request(request: str) -> Tuple[str, str, Optional[float]]:
     return uav_id, policy, arg
 
 
-def split_mpc_options(request: str) -> Tuple[str, Optional[float]]:
-    """Strips the optional trailing ``_log`` / ``_log<Hz>`` option from a request. Returns (request without the
-    option, log rate in Hz or None)."""
+def split_mpc_options(request: str) -> Tuple[str, Optional[float], Optional[str]]:
+    """Strips the optional trailing ``_log[<Hz>][:<profile>]`` option from a request. Returns (request without the
+    option, log rate in Hz or None, log profile or None)."""
     head, sep, last = request.strip().rpartition("_")
     if not sep or not last.startswith("log"):
-        return request.strip(), None
-    rate = last[len("log"):]
+        return request.strip(), None, None
+    rate, _, profile = last[len("log"):].partition(":")
     try:
         hz = float(rate) if rate else DEFAULT_LOG_RATE
     except ValueError:
         raise ValueError(f"Malformed log option: {last!r}") from None
     if not 0 < hz <= 100:
         raise ValueError(f"Log rate must be in (0, 100] Hz: {last!r}")
-    return head, hz
+    profile = profile or DEFAULT_LOG_PROFILE
+    if profile not in MPC_LOG_PROFILES:
+        raise ValueError(f"Unknown log profile {profile!r}, known: {sorted(MPC_LOG_PROFILES)}")
+    return head, hz, profile
 
 
 def resolve_uav_id(requested: str, uav_ids: Iterable[str]) -> Optional[str]:
@@ -144,7 +165,8 @@ class MpcSession:
     """One client streaming commands to one drone."""
 
     def __init__(self, uav: CrazyflieUAV, stream: trio.SocketStream, log: Logger, policy: str,
-                 policy_arg: Optional[float], log_hz: Optional[float] = None):
+                 policy_arg: Optional[float], log_hz: Optional[float] = None,
+                 log_profile: str = DEFAULT_LOG_PROFILE):
         self.uav = uav
         self.cf: Crazyflie = uav._get_crazyflie()
         self.stream = stream
@@ -156,6 +178,7 @@ class MpcSession:
         self.frames_received = 0
         self.frames_sent = 0
         self.log_hz = log_hz
+        self.log_profile = log_profile
         self.log_records_sent = 0
         self._log_session = None
 
@@ -226,7 +249,7 @@ class MpcSession:
             session = self.cf.log.create_session()
             session.configure(graceful_cleanup=True)
             names = {}
-            for name, variables in MPC_LOG_BLOCKS.items():
+            for name, variables in MPC_LOG_PROFILES[self.log_profile].items():
                 names[id(session.create_block(*variables, frequency=self.log_hz))] = name
             self._log_session = session
             await session.__aenter__()
@@ -260,10 +283,11 @@ class MpcSession:
     async def _read_rx_counter(self) -> Optional[int]:
         """Reads how many MPC commands the firmware has consumed so far, or None if it cannot tell."""
         with trio.move_on_after(0.5):
-            try:
-                return int(await self.uav.get_parameter(RX_COUNTER_PARAMETER, fetch=True))
-            except Exception:
-                return None
+            for name in RX_COUNTER_PARAMETERS:
+                try:
+                    return int(await self.uav.get_parameter(name, fetch=True))
+                except Exception:
+                    continue
         return None
 
     async def _report_rx_counter(self, rx_before: Optional[int]) -> None:

@@ -263,7 +263,7 @@ class aimotionlab(Extension):
         protocol."""
         request = (await stream.receive_some()).decode("utf-8", errors="replace")
         try:
-            request, log_hz = split_mpc_options(request)
+            request, log_hz, log_profile = split_mpc_options(request)
             uav_id, policy, policy_arg = parse_mpc_request(request)
         except ValueError as exc:
             self.log.warning(f"MPC port: {exc}")
@@ -281,7 +281,8 @@ class aimotionlab(Extension):
             return
         try:
             uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
-            session = MpcSession(uav, stream, self.log, policy, policy_arg, log_hz)
+            session = MpcSession(uav, stream, self.log, policy, policy_arg, log_hz,
+                                 log_profile or "mpc")
         except (KeyError, RuntimeError) as exc:  # RuntimeError: the drone is in the registry but not connected
             self.log.warning(f"Drone {uav_id} is not available for MPC streaming: {exc!r}")
             await stream.send_all(b"ACK_00")
@@ -289,7 +290,7 @@ class aimotionlab(Extension):
         self.mpc_sessions[uav_id] = session
         try:
             self.log.info(f"MPC client connected to drone {uav_id}, end of session policy: {policy}"
-                          + (f", onboard log at {log_hz:g} Hz." if log_hz else "."))
+                          + (f", onboard log '{log_profile}' at {log_hz:g} Hz." if log_hz else "."))
             await stream.send_all(f"ACK_{uav_id}".encode("utf-8"))
             await session.run()
         finally:
