@@ -1,16 +1,19 @@
-"""Relay that streams external (e.g. MPC) body rate + thrust commands from a TCP client to one drone.
+"""Relay that streams external (e.g. MPC) body rate + thrust commands from a TCP client to one drone, or to a group
+of drones that must start and end together (e.g. a cooperatively carried payload).
 
 Protocol, from the client's side:
 
-1. Send ``REQ_<drone id>[_<policy>[_<arg>]]`` as UTF-8 text, e.g. ``REQ_07``, ``REQ_07_land_0.3`` or
-   ``REQ_07_hover_2.0``. The policy decides what happens when the session ends (see below):
+1. Send ``REQ_<drone ids>[_<policy>[_<arg>]]`` as UTF-8 text, e.g. ``REQ_07``, ``REQ_07_land_0.3`` or
+   ``REQ_07,08_hover_2.0``. ``<drone ids>`` is one drone ID, or several separated by commas (a group). The policy
+   decides what happens when the session ends (see below):
 
    - ``land`` (default): land with the given descent velocity [m/s] (default 0.5).
    - ``hover``: hold the current position for the given number of seconds (default 2.0), then land.
    - ``none``: do nothing, the firmware's own timeout decides what happens.
 
-2. Wait for ``ACK_<drone id>``, or ``ACK_00`` if the drone is not available. Numeric IDs match regardless of
-   leading zeros, and the ACK carries the ID as the server knows it: ``REQ_8`` is answered with ``ACK_08``.
+2. Wait for ``ACK_<drone ids>``, or ``ACK_00`` if any of the drones is not available (all or nothing). Numeric IDs
+   match regardless of leading zeros, and the ACK carries the IDs as the server knows them: ``REQ_8`` is answered
+   with ``ACK_08``, ``REQ_7,8`` with ``ACK_07,08``.
 3. Send binary frames, each of which is forwarded to the drone unchanged as a generic setpoint (CRTP port 7,
    channel 0). The first byte is the setpoint type, which also sets the frame size:
    - type 20, body rates + thrust: ``struct.pack("<BBffffff", 20, status, thrust, roll_rate, pitch_rate,
@@ -20,32 +23,38 @@ Protocol, from the client's side:
      ``struct.pack("<BBfffffff", 21, status, thrust, wx, wy, wz, ax, ay, az)``: thrust in N, body rates in
      rad/s, angular accelerations in rad/s^2, all in the FLU body frame (no sign flips). 30 bytes, i.e. a full
      CRTP packet.
-4. To end the session, either send the single byte ``0x00``, or close the connection.
+   For a group, each tick is one group frame: one frame per drone, concatenated in the order of the request (the
+   types may differ between drones). A group frame is relayed only once it arrived completely, and its frames are
+   sent to the drones together.
+4. To end the session, either send the single byte ``0x00`` (in place of a frame, or of a group frame), or close
+   the connection.
 
 Onboard log (optional): append ``_log[<Hz>][:<profile>]`` to the request, e.g. ``REQ_07_land_0.3_log100`` or
 ``REQ_07_land_0.3_log50:indi`` (default 50 Hz, profile ``mpc``). During the session the server then streams the log
-variables of the profile (``MPC_LOG_PROFILES``) back to the client as JSON lines, one per received log packet: ``{"block": "a", "t_fw": <firmware ms>, "t_srv": <server unix
-time>, "<variable>": <value>, ...}``. If the variables cannot be logged (e.g. older firmware), a single
-``{"error": "..."}`` line is sent and the session continues without logging. Clients that do not ask for the log
-receive nothing after the ACK.
+variables of the profile (``MPC_LOG_PROFILES``) of every drone back to the client as JSON lines, one per received
+log packet: ``{"drone": "<id>", "block": "a", "t_fw": <firmware ms>, "t_srv": <server unix time>, "<variable>":
+<value>, ...}``. If the variables cannot be logged on a drone (e.g. older firmware), a single ``{"drone": "<id>",
+"error": "..."}`` line is sent and the session continues without that drone's log. Clients that do not ask for the
+log receive nothing after the ACK.
 
-The relay is latest-wins: if frames arrive faster than the radio can send them, only the newest one is sent. When
-the session ends (end byte, disconnect, or no frame for longer than ``STREAM_TIMEOUT`` after the first frame), the
-server hands the drone back to the high-level commander, and executes the policy chosen in the handshake.
+The relay is latest-wins: if frames arrive faster than the radio can send them, only the newest (group) frame is
+sent. The session ends on the end byte, a disconnect, no frame for longer than ``STREAM_TIMEOUT`` after the first
+one, an invalid frame, or a radio error on any drone. A group always ends as a whole: the server hands every drone
+back to the high-level commander, and executes the policy chosen in the handshake on all of them at once.
 """
 
 import json
 import struct
 import time
 from logging import Logger
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
 import trio
 from aiocflib.crazyflie import Crazyflie
 
 from flockwave.server.ext.crazyflie.driver import CrazyflieUAV
 
-__all__ = ("MpcSession", "parse_mpc_request", "split_mpc_options", "resolve_uav_id", "MPC_FRAME_SIZE",
+__all__ = ("MpcSession", "parse_mpc_request", "split_mpc_options", "split_uav_ids", "resolve_uav_id", "MPC_FRAME_SIZE",
            "MPC_FRAME_SIZES", "MPC_LOG_BLOCKS", "MPC_LOG_PROFILES")
 
 MPC_SETPOINT_TYPE = 20
@@ -86,6 +95,11 @@ MPC_LOG_PROFILES = {
               "ctrlMpc.aff_x", "ctrlMpc.aff_y"),
         "b": ("ctrlMpc.aff_z", "gyro.x", "gyro.y", "gyro.z", "ctrlMpc.rx"),
     },
+    "cf": {
+        # Crazyflie firmware with the body rate controller (crazyflie-firmware controller_body_rate.c, type 20 only)
+        "c1": ("ctrlMpc.state", "ctrlMpc.rx", "ctrlMpc.thrust", "ctrlMpc.roll", "ctrlMpc.pitch", "ctrlMpc.yaw"),
+        "c2": ("gyro.x", "gyro.y", "gyro.z"),
+    },
     "indi": {
         # The onboard INDI (controller_indi.c), for INDI flights
         # The commanded torque is not logged: it is G1 u of the logged rotor commands (after saturation)
@@ -96,7 +110,7 @@ MPC_LOG_PROFILES = {
 }
 """Log blocks streamed back to clients that ask for the onboard log. mpc: ctrlMpc.roll/pitch/yaw is the received
 rate setpoint (deg/s, pitch inverted), aff_* the type 21 angular acceleration feedforward (rad/s^2, FLU), gyro.* in
-deg/s. indi: Omega_ref after propagation (wr), filtered rate (wf), commanded angular acceleration (a), torque of the
+deg/s. cf: the same for the Crazyflie body rate controller (thrust in the firmware's units). indi: Omega_ref after propagation (wr), filtered rate (wf), commanded angular acceleration (a), torque of the
 measured rotor speeds (tf), rotor thrust commands u1..u4 [N], all SI and FLU."""
 
 MPC_LOG_BLOCKS = MPC_LOG_PROFILES["mpc"]
@@ -143,6 +157,17 @@ def split_mpc_options(request: str) -> Tuple[str, Optional[float], Optional[str]
     return head, hz, profile
 
 
+def split_uav_ids(uav_ids: str) -> List[str]:
+    """Splits the ``<drone ids>`` field of a request, ``07`` or ``07,08``. Raises ValueError on empty or repeated
+    IDs."""
+    ids = uav_ids.split(",")
+    if not all(ids):
+        raise ValueError(f"Empty drone ID in {uav_ids!r}")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"Repeated drone ID in {uav_ids!r}")
+    return ids
+
+
 def resolve_uav_id(requested: str, uav_ids: Iterable[str]) -> Optional[str]:
     """Finds the drone ID the client meant: an exact match, or else a numeric match, so that "8" finds "08"."""
     uav_ids = list(uav_ids)
@@ -162,50 +187,75 @@ def resolve_uav_id(requested: str, uav_ids: Iterable[str]) -> Optional[str]:
 
 
 class MpcSession:
-    """One client streaming commands to one drone."""
+    """One client streaming commands to one drone, or to a group of drones that start and end together."""
 
-    def __init__(self, uav: CrazyflieUAV, stream: trio.SocketStream, log: Logger, policy: str,
-                 policy_arg: Optional[float], log_hz: Optional[float] = None,
+    def __init__(self, uavs: Union[CrazyflieUAV, Sequence[CrazyflieUAV]], stream: trio.SocketStream, log: Logger,
+                 policy: str, policy_arg: Optional[float], log_hz: Optional[float] = None,
                  log_profile: str = DEFAULT_LOG_PROFILE):
-        self.uav = uav
-        self.cf: Crazyflie = uav._get_crazyflie()
+        self.uavs = list(uavs) if isinstance(uavs, (list, tuple)) else [uavs]
+        self.cfs: List[Crazyflie] = [uav._get_crazyflie() for uav in self.uavs]
         self.stream = stream
         self.log = log
         self.policy = policy
         self.policy_arg = policy_arg
-        self._latest: Optional[bytes] = None
+        self._latest: Optional[Tuple[bytes, ...]] = None
         self._new_frame = trio.Event()
-        self.frames_received = 0
-        self.frames_sent = 0
+        self._send_error: Optional[str] = None
+        self.frames_received = 0  # (group) frames
+        self.frames_sent = 0  # (group) frames, each sent to every drone
         self.log_hz = log_hz
         self.log_profile = log_profile
         self.log_records_sent = 0
-        self._log_session = None
+        self._log_sessions = []
+        self._send_lock = trio.Lock()  # log records of several drones share the stream
+
+    @property
+    def name(self) -> str:
+        return ("drone " if len(self.uavs) == 1 else "drones ") + ",".join(uav.id for uav in self.uavs)
 
     async def run(self) -> None:
-        """Relays frames until the session ends, then executes the end of session policy."""
+        """Relays frames until the session ends, then executes the end of session policy on every drone."""
         reason = "unknown"
-        rx_before = await self._read_rx_counter()
+        rx_before = await self._for_all(self._read_rx_counter)
         try:
             async with trio.open_nursery() as nursery:
-                nursery.start_soon(self._send_frames)
+                nursery.start_soon(self._send_frames, nursery.cancel_scope)
                 if self.log_hz:
-                    nursery.start_soon(self._stream_log)
+                    for uav, cf in zip(self.uavs, self.cfs):
+                        nursery.start_soon(self._stream_log, uav, cf)
                 reason = await self._receive_frames()
                 nursery.cancel_scope.cancel()
+            if self._send_error is not None:
+                reason = self._send_error
         finally:
-            self.log.info(f"MPC session of drone {self.uav.id} ended ({reason}), received {self.frames_received}, "
+            self.log.info(f"MPC session of {self.name} ended ({reason}), received {self.frames_received}, "
                           f"sent {self.frames_sent} frames. Policy: {self.policy}.")
-            # Hand the drone back even if we are being cancelled, e.g. by server shutdown.
+            # Hand the drones back even if we are being cancelled, e.g. by server shutdown.
             with trio.CancelScope(shield=True):
                 await self._end_session()
-                await self._report_rx_counter(rx_before)
+                rx_after = await self._for_all(self._read_rx_counter)
+                self._report_rx_counters(rx_before, rx_after)
                 # Only after the handover: removing the log blocks takes a few radio round trips
-                await self._close_log_session()
+                await self._for_all(self._close_log_session)
+                if self.log_records_sent:
+                    self.log.info(f"MPC session of {self.name}: streamed {self.log_records_sent} onboard log records.")
+
+    async def _for_all(self, func, *args) -> list:
+        """Runs func(uav, cf, *args) for every drone concurrently; returns the results in drone order."""
+        results = [None] * len(self.uavs)
+
+        async def one(k):
+            results[k] = await func(self.uavs[k], self.cfs[k], *args)
+
+        async with trio.open_nursery() as nursery:
+            for k in range(len(self.uavs)):
+                nursery.start_soon(one, k)
+        return results
 
     async def _receive_frames(self) -> str:
-        """Reads frames into the latest-wins slot. Returns the reason why the session ended."""
+        """Reads (group) frames into the latest-wins slot. Returns the reason why the session ended."""
         buffer = bytearray()
+        n = len(self.uavs)
         while True:
             # The timeout only applies once streaming started: the client may take its time with the first frame.
             timeout = STREAM_TIMEOUT if self.frames_received > 0 else float("inf")
@@ -220,103 +270,138 @@ class MpcSession:
                 while buffer:
                     if buffer[0] == MPC_END_SESSION:
                         return "end of session requested"
-                    size = MPC_FRAME_SIZES.get(buffer[0])
-                    if size is None:
-                        return f"invalid frame type {buffer[0]}"
-                    if len(buffer) < size:
-                        break  # wait for the rest of the frame
-                    self._latest = bytes(buffer[:size])
-                    del buffer[:size]
+                    frames, offset = [], 0
+                    while len(frames) < n and offset < len(buffer):
+                        size = MPC_FRAME_SIZES.get(buffer[offset])
+                        if size is None:
+                            return f"invalid frame type {buffer[offset]}"
+                        if len(buffer) < offset + size:
+                            break
+                        frames.append(bytes(buffer[offset:offset + size]))
+                        offset += size
+                    if len(frames) < n:
+                        break  # wait for the rest of the (group) frame
+                    self._latest = tuple(frames)
+                    del buffer[:offset]
                     self.frames_received += 1
                     self._new_frame.set()
                 continue
             return f"no frame for {STREAM_TIMEOUT * 1000:.0f} ms"
 
-    async def _send_frames(self) -> None:
-        """Sends the newest frame whenever there is one. Frames overwritten while the radio was busy are dropped."""
+    async def _send_frames(self, cancel_scope: trio.CancelScope) -> None:
+        """Sends the newest (group) frame whenever there is one, to all drones at once; the next one only after all
+        of them went out. Frames overwritten while the radio was busy are dropped. A radio error ends the session."""
         while True:
             await self._new_frame.wait()
             self._new_frame = trio.Event()
-            await self.cf.send_packet(port=CRTP_PORT_SETPOINT_GENERIC, channel=SET_SETPOINT_CHANNEL,
-                                      data=self._latest)
+            frames = self._latest
+            try:
+                await self._for_all(self._send_setpoint, frames)
+            except Exception as exc:
+                while getattr(exc, "exceptions", None):  # exception group from the nursery in _for_all
+                    exc = exc.exceptions[0]
+                self._send_error = f"radio error, {exc}"
+                cancel_scope.cancel()
+                return
             self.frames_sent += 1
 
-    async def _stream_log(self) -> None:
-        """Streams the onboard MPC log variables to the client as JSON lines. Never raises: logging problems must
-        not end the MPC session. The log blocks stay on the drone until _close_log_session()."""
+    async def _send_setpoint(self, uav: CrazyflieUAV, cf: Crazyflie, frames: Tuple[bytes, ...]) -> None:
         try:
-            await self.cf.log.validate()  # make sure the log TOC is loaded
-            session = self.cf.log.create_session()
+            await cf.send_packet(port=CRTP_PORT_SETPOINT_GENERIC, channel=SET_SETPOINT_CHANNEL,
+                                 data=frames[self.uavs.index(uav)])
+        except Exception as exc:
+            raise RuntimeError(f"drone {uav.id}: {exc!r}") from exc
+
+    async def _send_line(self, record: dict) -> None:
+        async with self._send_lock:
+            await self.stream.send_all((json.dumps(record) + "\n").encode("utf-8"))
+
+    async def _stream_log(self, uav: CrazyflieUAV, cf: Crazyflie) -> None:
+        """Streams the onboard MPC log variables of one drone to the client as JSON lines. Never raises: logging
+        problems must not end the MPC session. The log blocks stay on the drone until _close_log_session()."""
+        try:
+            await cf.log.validate()  # make sure the log TOC is loaded
+            session = cf.log.create_session()
             session.configure(graceful_cleanup=True)
             names = {}
             for name, variables in MPC_LOG_PROFILES[self.log_profile].items():
                 names[id(session.create_block(*variables, frequency=self.log_hz))] = name
-            self._log_session = session
+            self._log_sessions.append((uav, session))
             await session.__aenter__()
             async for message in session.messages():
-                record = {"block": names.get(id(message.block), "?"), "t_fw": message.timestamp,
+                record = {"drone": uav.id, "block": names.get(id(message.block), "?"), "t_fw": message.timestamp,
                           "t_srv": time.time(), **message.to_dict()}
-                await self.stream.send_all((json.dumps(record) + "\n").encode("utf-8"))
+                await self._send_line(record)
                 self.log_records_sent += 1
         except (trio.BrokenResourceError, trio.ClosedResourceError):
             pass  # client gone; the receive side ends the session
         except Exception as exc:
-            self.log.warning(f"Drone {self.uav.id}: MPC onboard log not available: {exc!r}")
+            self.log.warning(f"Drone {uav.id}: MPC onboard log not available: {exc!r}")
             try:
-                await self.stream.send_all((json.dumps({"error": repr(exc)}) + "\n").encode("utf-8"))
+                await self._send_line({"drone": uav.id, "error": repr(exc)})
             except Exception:
                 pass
 
-    async def _close_log_session(self) -> None:
+    async def _close_log_session(self, uav: CrazyflieUAV, cf: Crazyflie) -> None:
         """Removes the log blocks from the drone (best effort, bounded in time)."""
-        if self._log_session is None:
-            return
-        session, self._log_session = self._log_session, None
-        with trio.move_on_after(1.0):
-            try:
-                await session.__aexit__(None, None, None)
-            except Exception as exc:
-                self.log.warning(f"Drone {self.uav.id}: removing the MPC log blocks failed: {exc!r}")
-        if self.log_records_sent:
-            self.log.info(f"Drone {self.uav.id}: streamed {self.log_records_sent} onboard log records.")
+        for owner, session in [entry for entry in self._log_sessions if entry[0] is uav]:
+            self._log_sessions.remove((owner, session))
+            with trio.move_on_after(1.0):
+                try:
+                    await session.__aexit__(None, None, None)
+                except Exception as exc:
+                    self.log.warning(f"Drone {uav.id}: removing the MPC log blocks failed: {exc!r}")
 
-    async def _read_rx_counter(self) -> Optional[int]:
+    async def _read_rx_counter(self, uav: CrazyflieUAV, cf: Crazyflie) -> Optional[int]:
         """Reads how many MPC commands the firmware has consumed so far, or None if it cannot tell."""
         with trio.move_on_after(0.5):
             for name in RX_COUNTER_PARAMETERS:
                 try:
-                    return int(await self.uav.get_parameter(name, fetch=True))
+                    return int(await uav.get_parameter(name, fetch=True))
                 except Exception:
                     continue
         return None
 
-    async def _report_rx_counter(self, rx_before: Optional[int]) -> None:
-        """Logs how many of the frames sent over the radio the firmware actually consumed."""
-        if rx_before is None or self.frames_sent == 0:
+    def _report_rx_counters(self, rx_before: list, rx_after: list) -> None:
+        """Logs how many of the frames sent over the radio each firmware actually consumed."""
+        if self.frames_sent == 0:
             return
-        rx_after = await self._read_rx_counter()
-        if rx_after is None:
-            return
-        consumed = rx_after - rx_before
-        self.log.info(f"Drone {self.uav.id} consumed {consumed} of {self.frames_sent} MPC commands sent "
-                      f"({100.0 * (1 - consumed / self.frames_sent):.1f}% lost).")
+        for uav, before, after in zip(self.uavs, rx_before, rx_after):
+            if before is None or after is None:
+                continue
+            consumed = after - before
+            self.log.info(f"Drone {uav.id} consumed {consumed} of {self.frames_sent} MPC commands sent "
+                          f"({100.0 * (1 - consumed / self.frames_sent):.1f}% lost).")
 
     async def _end_session(self) -> None:
-        """Hands the drone back to the high-level commander, and executes the policy."""
+        """Hands every drone back to the high-level commander first, then executes the policy on all of them."""
         if self.policy == "none" or self.frames_received == 0:
             return
+        # Tells the firmware that low-level setpoints stopped, so the high-level commander takes over from the
+        # current state. Payload: meta command, then how long the last setpoint stays valid [ms].
+        handed_over = await self._for_all(self._notify_setpoints_stop)
+        await self._for_all(self._execute_policy, handed_over)
+
+    async def _notify_setpoints_stop(self, uav: CrazyflieUAV, cf: Crazyflie) -> bool:
         try:
-            # Tells the firmware that low-level setpoints stopped, so the high-level commander takes over from the
-            # current state. Payload: meta command, then how long the last setpoint stays valid [ms].
-            await self.cf.send_packet(port=CRTP_PORT_SETPOINT_GENERIC, channel=META_COMMAND_CHANNEL,
-                                      data=struct.pack("<BI", META_NOTIFY_SETPOINTS_STOP, 0))
-            if self.policy == "hover":
-                self.log.info(f"Drone {self.uav.id}: hovering for {self.policy_arg:.1f} s, then landing.")
-                await self.cf.high_level_commander.go_to(0.0, 0.0, 0.0, duration=1.0, relative=True)
-                await trio.sleep(self.policy_arg)
-                await self.uav.land()
-            elif self.policy == "land":
-                self.log.info(f"Drone {self.uav.id}: landing with {self.policy_arg:.2f} m/s.")
-                await self.uav.land(velocity=self.policy_arg)
+            await cf.send_packet(port=CRTP_PORT_SETPOINT_GENERIC, channel=META_COMMAND_CHANNEL,
+                                 data=struct.pack("<BI", META_NOTIFY_SETPOINTS_STOP, 0))
+            return True
         except Exception as exc:
-            self.log.warning(f"Drone {self.uav.id}: end of session policy {self.policy} failed: {exc!r}")
+            self.log.warning(f"Drone {uav.id}: handing back to the high-level commander failed: {exc!r}")
+            return False
+
+    async def _execute_policy(self, uav: CrazyflieUAV, cf: Crazyflie, handed_over: list) -> None:
+        if not handed_over[self.uavs.index(uav)]:
+            return
+        try:
+            if self.policy == "hover":
+                self.log.info(f"Drone {uav.id}: hovering for {self.policy_arg:.1f} s, then landing.")
+                await cf.high_level_commander.go_to(0.0, 0.0, 0.0, duration=1.0, relative=True)
+                await trio.sleep(self.policy_arg)
+                await uav.land()
+            elif self.policy == "land":
+                self.log.info(f"Drone {uav.id}: landing with {self.policy_arg:.2f} m/s.")
+                await uav.land(velocity=self.policy_arg)
+        except Exception as exc:
+            self.log.warning(f"Drone {uav.id}: end of session policy {self.policy} failed: {exc!r}")

@@ -1,4 +1,5 @@
-"""Client for the "mpc" port of the aimotionlab extension: streams thrust + body rate commands to one drone.
+"""Client for the "mpc" port of the aimotionlab extension: streams thrust + body rate commands to one drone, or to a
+group of drones that start and end together.
 
 Usage from your own MPC code:
 
@@ -6,6 +7,13 @@ Usage from your own MPC code:
         while running:
             mpc.send(thrust_N, roll_rate, pitch_rate, yaw_rate)   # deg/s, see the sign convention below
     # leaving the block ends the session: the server hands the drone back to the high-level commander and lands
+
+A group gets one frame per drone and tick, in the order of the IDs; if anything goes wrong (the client stops
+streaming or disconnects, a radio error on any drone), the server ends the session for every drone of the group:
+
+    with MpcClient(["07", "08"], policy="land", policy_arg=0.3) as mpc:
+        while running:
+            mpc.send_frames([MpcClient.frame(T1, r1, p1, y1), MpcClient.frame(T2, r2, p2, y2)])
 
 Sign convention (same as the UART path of the bumblebee body rate controller): with body rates (p, q, r) in the
 drone's FLU body frame, send roll_rate = p, pitch_rate = -q, yaw_rate = r, all in deg/s.
@@ -21,10 +29,11 @@ Run as a script for a props-off bench test, which streams a slow sinusoid on the
 
 import socket
 import struct
+import threading
 import time
 from argparse import ArgumentParser
 from math import sin, pi, radians
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 MPC_SETPOINT_TYPE = 20
 MPC_INDI_SETPOINT_TYPE = 21
@@ -34,34 +43,85 @@ INDI_FRAME = struct.Struct("<BBfffffff")  # 30 bytes, a full CRTP packet
 
 
 class MpcClient:
-    def __init__(self, drone_id: str, policy: str = "land", policy_arg: Optional[float] = None,
-                 host: str = "127.0.0.1", port: int = 6004):
-        """policy: what the server does when the session ends: "land" (arg: descent velocity [m/s]), "hover"
-        (arg: hover time [s] before landing), or "none" (leave it to the firmware)."""
-        self.drone_id = drone_id
-        request = f"REQ_{drone_id}_{policy}" + (f"_{policy_arg}" if policy_arg is not None else "")
+    def __init__(self, drone_ids: Union[str, Sequence[str]], policy: str = "land", policy_arg: Optional[float] = None,
+                 host: str = "127.0.0.1", port: int = 6004, log_hz: Optional[float] = None,
+                 log_profile: Optional[str] = None, log_path: Optional[str] = None):
+        """drone_ids: one drone ID, or a list of them for a group session.
+        policy: what the server does when the session ends: "land" (arg: descent velocity [m/s]), "hover"
+        (arg: hover time [s] before landing), or "none" (leave it to the firmware).
+        log_hz, log_profile: ask for the onboard log (see mpc_relay.py); its JSON lines are written to log_path."""
+        ids = [drone_ids] if isinstance(drone_ids, str) else list(drone_ids)
+        request = f"REQ_{','.join(ids)}_{policy}" + (f"_{policy_arg}" if policy_arg is not None else "")
+        if log_hz:
+            request += f"_log{log_hz:g}" + (f":{log_profile}" if log_profile else "")
         self.sock = socket.create_connection((host, port))
         # Without this, the kernel may hold back small frames to batch them together (Nagle's algorithm).
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.sendall(request.encode("utf-8"))
-        ack = self.sock.recv(64).decode("utf-8", errors="replace")
+        # The ACK has no terminator; log lines (JSON objects) may follow it in the same read
+        ack, brace, rest = self.sock.recv(256).decode("utf-8", errors="replace").partition("{")
         if not ack.startswith("ACK_") or ack == "ACK_00":
             self.sock.close()
             raise RuntimeError(f"Server refused MPC request {request!r} (answer: {ack!r}), see the server log")
-        self.drone_id = ack[len("ACK_"):]  # as the server knows it, e.g. "08" for "8"
+        self.drone_ids = ack[len("ACK_"):].split(",")  # as the server knows them, e.g. "08" for "8"
+        self.drone_id = ",".join(self.drone_ids)
         self.closed = False
+        self.log_records = 0
+        self._log_thread = None
+        if log_hz:
+            self._log_thread = threading.Thread(target=self._read_log, args=(log_path, (brace + rest).encode()),
+                                                daemon=True)
+            self._log_thread.start()
+
+    @staticmethod
+    def frame(thrust: float, roll_rate: float, pitch_rate: float, yaw_rate: float, status: int = 0,
+              com_x: float = 0.0, com_y: float = 0.0) -> bytes:
+        """One type 20 frame, see send()."""
+        return FRAME.pack(MPC_SETPOINT_TYPE, status, thrust, roll_rate, pitch_rate, yaw_rate, com_x, com_y)
+
+    @staticmethod
+    def indi_frame(thrust: float, omega, alpha, status: int = 0) -> bytes:
+        """One type 21 frame, see send_indi()."""
+        return INDI_FRAME.pack(MPC_INDI_SETPOINT_TYPE, status, thrust, *omega, *alpha)
+
+    def send_frames(self, frames: Sequence[bytes]) -> None:
+        """Sends one tick: one frame (frame() or indi_frame()) per drone, in the order of the drone IDs."""
+        if len(frames) != len(self.drone_ids):
+            raise ValueError(f"{len(frames)} frames for {len(self.drone_ids)} drones")
+        self.sock.sendall(b"".join(frames))
+
+    def _read_log(self, path: Optional[str], pending: bytes) -> None:
+        """Writes the onboard log lines to path (JSON lines) until the connection closes."""
+        out = open(path, "w") if path else None
+        try:
+            while True:
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    self.log_records += 1
+                    if out:
+                        out.write(line.decode("utf-8", errors="replace") + "\n")
+                try:
+                    data = self.sock.recv(4096)
+                except OSError:
+                    return
+                if not data:
+                    return
+                pending += data
+        finally:
+            if out:
+                out.close()
 
     def send(self, thrust: float, roll_rate: float, pitch_rate: float, yaw_rate: float, status: int = 0,
              com_x: float = 0.0, com_y: float = 0.0) -> None:
-        """Sends one command. thrust in N, rates in deg/s, center of mass shift in m. A nonzero status marks the
-        command as invalid; the bumblebee firmware stops the motors after too many invalid commands in a row."""
-        self.sock.sendall(FRAME.pack(MPC_SETPOINT_TYPE, status, thrust, roll_rate, pitch_rate, yaw_rate,
-                                     com_x, com_y))
+        """Sends one command to a single drone. thrust in N, rates in deg/s, center of mass shift in m. A nonzero
+        status marks the command as invalid; the bumblebee firmware stops the motors after too many invalid commands
+        in a row."""
+        self.send_frames([self.frame(thrust, roll_rate, pitch_rate, yaw_rate, status, com_x, com_y)])
 
     def send_indi(self, thrust: float, omega, alpha, status: int = 0) -> None:
         """Sends one type 21 command: thrust in N, body rates omega (3) in rad/s and angular acceleration
         feedforward alpha (3) in rad/s^2, FLU body frame. A nonzero status marks the command as invalid."""
-        self.sock.sendall(INDI_FRAME.pack(MPC_INDI_SETPOINT_TYPE, status, thrust, *omega, *alpha))
+        self.send_frames([self.indi_frame(thrust, omega, alpha, status)])
 
     def close(self) -> None:
         """Ends the session cleanly: the server executes the policy chosen when connecting."""
@@ -69,7 +129,18 @@ class MpcClient:
             self.closed = True
             try:
                 self.sock.sendall(MPC_END_SESSION)
+            except OSError:
+                pass  # the server already ended the session
             finally:
+                if self._log_thread is not None:
+                    # The server stops logging when the session ends; read what is still in flight, then wake the
+                    # reader thread up (shutdown, unlike close, interrupts a blocking recv)
+                    self._log_thread.join(timeout=0.5)
+                    try:
+                        self.sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    self._log_thread.join(timeout=1.0)
                 self.sock.close()
 
     def __enter__(self) -> "MpcClient":

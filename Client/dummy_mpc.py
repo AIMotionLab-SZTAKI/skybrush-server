@@ -1,20 +1,25 @@
-"""Stand-in for the MPC: an off-board geometric position controller that outputs thrust + body rates, streamed to
-the drone through the "mpc" port of the Skybrush server. Used to validate the streaming chain before flying the real
-MPC.
+"""Stand-in for the MPC: an off-board geometric position controller per drone that outputs thrust + body rates,
+streamed to one or more drones through the "mpc" port of the Skybrush server. Used to validate the streaming chain
+before flying the real MPC.
 
-The drone must already be airborne (take off from Skybrush Live or with a DroneHandler), with the "Bodyrate"
-controller selected and bodyrate.input_src = 1. The script takes the current position as its hover reference, so
-there is no jump when it takes over. Mission: hover, step in x, step back, hover, then end the session, upon which
-the server lands the drone.
+The drones must already be airborne (take off from Skybrush Live or with a DroneHandler), with the "Bodyrate"
+controller selected and bodyrate.input_src = 1. The script takes each drone's current position as its hover
+reference, so there is no jump when it takes over. Mission, for all drones together: hover, step in x, step back,
+hover, then end the session, upon which the server lands the drones.
 
-The script aborts (ends the session, i.e. the server lands the drone) if mocap is lost, if the position error or
-the tilt becomes too large, or on Ctrl+C.
+With several drones, the commands go out as one group session (one connection, the drones start and end together),
+or with --per-drone as one session per drone (one connection each, for comparison). The script aborts (ends the
+session(s), i.e. the server lands every drone) if mocap of any drone is lost, if any position error or tilt becomes
+too large, if two drones get too close, or on Ctrl+C.
 
     poetry run python Client/dummy_mpc.py 07 --profile cf                  # fly
+    poetry run python Client/dummy_mpc.py 07 08 --profile cf --log 100     # fly two, group session, onboard log
+    poetry run python Client/dummy_mpc.py 07 08 --profile cf --per-drone   # fly two, one session per drone
     poetry run python Client/dummy_mpc.py 07 --profile cf --sim --no-server  # simulate only, no server, no mocap
-    poetry run python Client/dummy_mpc.py 07 --profile cf --sim            # simulated drone, frames go to server
+    poetry run python Client/dummy_mpc.py 07 08 --profile cf --sim         # simulated drones, frames go to server
 
-Mocap: the rigid body is looked up by name, which is the drone ID with the profile's prefix (e.g. "cf07", "bb07").
+Mocap: each rigid body is looked up by name, which is the drone ID with the profile's prefix (e.g. "cf07", "bb07").
+--log writes the onboard log (profile = --profile) as JSON lines to mpc_log_<ids>_<time>.jsonl, see mpc_relay.py.
 """
 
 import os
@@ -23,7 +28,7 @@ import threading
 import time
 from argparse import ArgumentParser
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -53,6 +58,7 @@ PROFILES = {
 }
 
 MAX_POSITION_ERROR = 0.5  # m
+MIN_DISTANCE = 0.25  # m, between any two drones
 MAX_TILT = np.radians(45)
 MOCAP_TIMEOUT = 0.1  # s
 
@@ -112,16 +118,16 @@ def from_wire(roll: float, pitch: float, yaw: float) -> np.ndarray:
 
 
 class MocapSource:
-    """Reads the pose of one rigid body from OptiTrack in a background thread."""
+    """Reads the poses of rigid bodies from OptiTrack in a background thread (one connection for all of them)."""
 
-    def __init__(self, body: str, host: str):
+    def __init__(self, bodies: List[str], host: str):
         import motioncapture  # imported here so that --sim works without it
 
-        self.body = body
+        self.bodies = bodies
         self.mc = motioncapture.connect("optitrack", {"hostname": host})
         self.lock = threading.Lock()
-        self.pose: Optional[Tuple[float, np.ndarray, np.ndarray]] = None  # (time, position, rotation)
-        self.vel = np.zeros(3)
+        self.poses: Dict[str, Tuple[float, np.ndarray, np.ndarray]] = {}  # body -> (time, position, rotation)
+        self.vels = {body: np.zeros(3) for body in bodies}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -141,23 +147,36 @@ class MocapSource:
     def _run(self) -> None:
         while not self._stop.is_set():
             self.mc.waitForNextFrame()
-            obj = self.mc.rigidBodies.get(self.body)
-            if obj is None or obj.rotation is None:
-                continue
             t = time.perf_counter()
-            pos = np.array(obj.position, dtype=float)
-            rot = quat_to_rot(obj.rotation.w, obj.rotation.x, obj.rotation.y, obj.rotation.z)
-            with self.lock:
-                if self.pose is not None and t > self.pose[0]:
-                    # Finite difference, low pass filtered
-                    self.vel = 0.7 * self.vel + 0.3 * (pos - self.pose[1]) / (t - self.pose[0])
-                self.pose = (t, pos, rot)
+            for body in self.bodies:
+                obj = self.mc.rigidBodies.get(body)
+                if obj is None or obj.rotation is None:
+                    continue
+                pos = np.array(obj.position, dtype=float)
+                rot = quat_to_rot(obj.rotation.w, obj.rotation.x, obj.rotation.y, obj.rotation.z)
+                with self.lock:
+                    last = self.poses.get(body)
+                    if last is not None and t > last[0]:
+                        # Finite difference, low pass filtered
+                        self.vels[body] = 0.7 * self.vels[body] + 0.3 * (pos - last[1]) / (t - last[0])
+                    self.poses[body] = (t, pos, rot)
+
+    def state(self, body: str):
+        with self.lock:
+            pose = self.poses.get(body)
+            if pose is None or time.perf_counter() - pose[0] > MOCAP_TIMEOUT:
+                return None
+            return pose[1].copy(), self.vels[body].copy(), pose[2].copy()
+
+
+class MocapDrone:
+    """One rigid body of a MocapSource, with the interface of SimulatedDrone."""
+
+    def __init__(self, source: MocapSource, body: str):
+        self.source, self.body = source, body
 
     def state(self):
-        with self.lock:
-            if self.pose is None or time.perf_counter() - self.pose[0] > MOCAP_TIMEOUT:
-                return None
-            return self.pose[1].copy(), self.vel.copy(), self.pose[2].copy()
+        return self.source.state(self.body)
 
 
 class SimulatedDrone:
@@ -197,75 +216,137 @@ def reference(t: float, start: np.ndarray, step: float) -> np.ndarray:
 MISSION_DURATION = 12.0
 
 
+def open_sessions(args, ids: List[str]) -> List[MpcClient]:
+    """One group session for all drones, or with --per-drone one session per drone."""
+    groups = [[i] for i in ids] if args.per_drone else [ids]
+    clients = []
+    try:
+        for group in groups:
+            log_path = None
+            if args.log:
+                log_path = f"mpc_log_{'_'.join(group)}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+            clients.append(MpcClient(group, policy=args.policy, host=args.host, port=args.port, log_hz=args.log,
+                                     log_profile=args.profile, log_path=log_path))
+    except Exception:
+        for client in clients:  # all or nothing on the client side too
+            client.close()
+        raise
+    return clients
+
+
 def main() -> None:
     parser = ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("drone_id")
+    parser.add_argument("drone_ids", nargs="+")
     parser.add_argument("--profile", choices=PROFILES.keys(), default="cf")
     parser.add_argument("--rate", type=float, default=100.0, help="control rate [Hz]")
     parser.add_argument("--step", type=float, default=0.3, help="x step size [m]")
     parser.add_argument("--policy", default="land", choices=["land", "hover", "none"])
+    parser.add_argument("--per-drone", action="store_true", help="one session (connection) per drone, not a group")
+    parser.add_argument("--log", type=float, nargs="?", const=100.0, default=None, metavar="HZ",
+                        help="stream the onboard log (default 100 Hz) into mpc_log_*.jsonl")
+    parser.add_argument("--host", default="127.0.0.1", help="Skybrush server")
+    parser.add_argument("--port", type=int, default=6004, help="mpc port of the Skybrush server")
     parser.add_argument("--mocap-host", default="192.168.2.141")
-    parser.add_argument("--sim", action="store_true", help="control a simulated drone instead of the mocap one")
+    parser.add_argument("--sim", action="store_true", help="control simulated drones instead of the mocap ones")
     parser.add_argument("--no-server", action="store_true", help="with --sim: do not connect to the server")
     args = parser.parse_args()
 
     profile = PROFILES[args.profile]
-    controller = Controller(profile)
+    ids = args.drone_ids
+    controllers = [Controller(profile) for _ in ids]
     dt = 1.0 / args.rate
 
+    mocap = None
     if args.sim:
-        source = SimulatedDrone(profile, np.array([0.0, 0.0, 0.5]))
+        drones = [SimulatedDrone(profile, np.array([0.0, 0.6 * k, 0.5])) for k in range(len(ids))]
     else:
-        source = MocapSource(f"{profile.mocap_prefix}{args.drone_id}", args.mocap_host)
+        mocap = MocapSource([f"{profile.mocap_prefix}{i}" for i in ids], args.mocap_host)
+        drones = [MocapDrone(mocap, body) for body in mocap.bodies]
         t_wait = time.perf_counter()
-        while source.state() is None:
+        while any(d.state() is None for d in drones):
             if time.perf_counter() - t_wait > 3.0:
-                raise RuntimeError(f"No mocap data for rigid body {source.body}")
+                missing = [d.body for d in drones if d.state() is None]
+                mocap.close()
+                raise RuntimeError(f"No mocap data for rigid body(s) {missing}")
             time.sleep(0.01)
 
-    pos, _, rot = source.state()
-    start, yaw_ref = pos, yaw_of(rot)
-    print(f"Hover reference: {np.round(start, 3)}, yaw {np.degrees(yaw_ref):.1f} deg")
-    if not args.sim and start[2] < 0.2:
-        raise RuntimeError("The drone does not seem to be airborne; take off from Skybrush first.")
+    starts, yaw_refs = [], []
+    for drone_id, drone in zip(ids, drones):
+        pos, _, rot = drone.state()
+        starts.append(pos)
+        yaw_refs.append(yaw_of(rot))
+        print(f"Drone {drone_id}: hover reference {np.round(pos, 3)}, yaw {np.degrees(yaw_refs[-1]):.1f} deg")
+        if not args.sim and pos[2] < 0.2:
+            raise RuntimeError(f"Drone {drone_id} does not seem to be airborne; take off from Skybrush first.")
+    for a in range(len(ids)):
+        for b in range(a):
+            if np.linalg.norm(starts[a] - starts[b]) < 1.5 * MIN_DISTANCE:
+                raise RuntimeError(f"Drones {ids[a]} and {ids[b]} start too close to each other.")
 
-    mpc = None if (args.sim and args.no_server) else MpcClient(args.drone_id, policy=args.policy)
-    max_error = 0.0
+    clients = [] if (args.sim and args.no_server) else open_sessions(args, ids)
+    if clients:
+        print("Sessions: " + ", ".join(f"[{c.drone_id}]" for c in clients))
+    max_error = np.zeros(len(ids))
+    ticks = 0
     reason = "mission finished"
     try:
         t0 = time.perf_counter()
         next_t = t0
         while (t := time.perf_counter() - t0) < MISSION_DURATION:
-            state = source.state()
-            if state is None:
-                reason = "mocap lost"
+            states = [d.state() for d in drones]
+            lost = [i for i, st in zip(ids, states) if st is None]
+            if lost:
+                reason = f"mocap of drone(s) {', '.join(lost)} lost"
                 break
-            pos, vel, rot = state
-            pos_ref = reference(t, start, args.step)
-            error = float(np.linalg.norm(pos - pos_ref))
-            max_error = max(max_error, error)
-            tilt = float(np.arccos(np.clip(rot[2, 2], -1.0, 1.0)))
-            if error > MAX_POSITION_ERROR or tilt > MAX_TILT:
-                reason = f"safety limit (position error {error:.2f} m, tilt {np.degrees(tilt):.0f} deg)"
-                break
-            thrust, rates = controller(pos, vel, rot, pos_ref, yaw_ref)
-            roll, pitch, yaw = to_wire(rates)
-            if mpc is not None:
-                mpc.send(thrust, roll, pitch, yaw)
-            if args.sim:
-                source.apply(thrust, roll, pitch, yaw, dt)
-            if int(t / dt) % int(args.rate) == 0:
-                print(f"t={t:5.2f} pos={np.round(pos, 3)} ref={np.round(pos_ref, 3)} thrust={thrust:.3f} N "
-                      f"rates=({roll:6.1f}, {pitch:6.1f}, {yaw:6.1f}) deg/s")
-            next_t += dt
-            time.sleep(max(0.0, next_t - time.perf_counter()))
+            frames, status = [], []
+            for k, ((pos, vel, rot), start) in enumerate(zip(states, starts)):
+                pos_ref = reference(t, start, args.step)
+                error = float(np.linalg.norm(pos - pos_ref))
+                max_error[k] = max(max_error[k], error)
+                tilt = float(np.arccos(np.clip(rot[2, 2], -1.0, 1.0)))
+                if error > MAX_POSITION_ERROR or tilt > MAX_TILT:
+                    reason = (f"safety limit on drone {ids[k]} (position error {error:.2f} m, "
+                              f"tilt {np.degrees(tilt):.0f} deg)")
+                    break
+                thrust, rates = controllers[k](pos, vel, rot, pos_ref, yaw_refs[k])
+                roll, pitch, yaw = to_wire(rates)
+                frames.append((thrust, roll, pitch, yaw))
+                status.append(f"{ids[k]}: pos={np.round(pos, 3)} ref={np.round(pos_ref, 3)} T={thrust:.3f} N")
+            else:
+                distances = [np.linalg.norm(states[a][0] - states[b][0]) for a in range(len(ids)) for b in range(a)]
+                if distances and min(distances) < MIN_DISTANCE:
+                    reason = f"drones closer than {MIN_DISTANCE} m"
+                    break
+                packed = [MpcClient.frame(*f) for f in frames]
+                if args.per_drone:
+                    for client, frame in zip(clients, packed):
+                        client.send_frames([frame])
+                elif clients:
+                    clients[0].send_frames(packed)
+                ticks += 1
+                if args.sim:
+                    for drone, f in zip(drones, frames):
+                        drone.apply(*f, dt)
+                if int(t / dt) % int(args.rate) == 0:
+                    print(f"t={t:5.2f} " + " | ".join(status))
+                next_t += dt
+                time.sleep(max(0.0, next_t - time.perf_counter()))
+                continue
+            break  # safety limit
     except KeyboardInterrupt:
         reason = "interrupted"
+    except OSError as exc:  # e.g. the server ended the session and closed the connection
+        reason = f"connection error: {exc!r}"
     finally:
-        if mpc is not None:
-            mpc.close()
-    print(f"Session ended: {reason}. Max position error: {max_error:.3f} m. Server policy: {args.policy}.")
-    if isinstance(source, MocapSource) and not source.close():
+        for client in clients:
+            client.close()
+    print(f"Session(s) ended: {reason}. Sent {ticks} ticks. Server policy: {args.policy}.")
+    for drone_id, err in zip(ids, max_error):
+        print(f"  drone {drone_id}: max position error {err:.3f} m")
+    for client in clients:
+        if client.log_records:
+            print(f"  [{client.drone_id}]: {client.log_records} onboard log records")
+    if mocap is not None and not mocap.close():
         # The reader thread is blocked in the C++ library, which would abort at interpreter exit. The session is
         # already closed, so skip the destructors.
         sys.stdout.flush()

@@ -14,7 +14,7 @@ from aiocflib.crazyflie import Crazyflie
 from aiocflib.crazyflie.log import LogMessage, LogSession
 from .frame_handler import AiMotionMocapFrameHandler
 from .drone_handler import DroneHandler
-from .mpc_relay import MpcSession, parse_mpc_request, resolve_uav_id, split_mpc_options
+from .mpc_relay import MpcSession, parse_mpc_request, resolve_uav_id, split_mpc_options, split_uav_ids
 from typing import Dict, Callable, Union, Tuple, Any, List, Optional
 from flockwave.server.ext.show.clock import ShowClock
 from flockwave.server.tasks import wait_until
@@ -83,7 +83,8 @@ class aimotionlab(Extension):
         self.cf_log: Optional[Any] = None
         self.log_event: Optional[trio.Event] = None
         self.event_notifications: Dict[str, Dict[int, bytes]] = {}
-        # Drones that currently have a client streaming MPC commands to them, see stream_mpc_to_cf
+        # Drones that currently have a client streaming MPC commands to them (a group session is registered under
+        # each of its drones), see stream_mpc_to_cf
         self.mpc_sessions: Dict[str, MpcSession] = {}
 
     def _register_event_notification(self, event: str, port: Union[str, int], msg: bytes):
@@ -259,42 +260,51 @@ class aimotionlab(Extension):
         self.log.info(f"[{self.get_show_clock().seconds:.2f}]: Client disconnected from LQR port.")
 
     async def stream_mpc_to_cf(self, stream: trio.SocketStream, port: int):
-        """Relays body rate + thrust commands from a client (e.g. an MPC) to one drone. See mpc_relay.py for the
-        protocol."""
+        """Relays body rate + thrust commands from a client (e.g. an MPC) to one drone, or to a group of drones that
+        start and end together. See mpc_relay.py for the protocol."""
         request = (await stream.receive_some()).decode("utf-8", errors="replace")
         try:
             request, log_hz, log_profile = split_mpc_options(request)
-            uav_id, policy, policy_arg = parse_mpc_request(request)
+            requested, policy, policy_arg = parse_mpc_request(request)
+            requested_ids = split_uav_ids(requested)
         except ValueError as exc:
             self.log.warning(f"MPC port: {exc}")
             await stream.send_all(b"ACK_00")
             return
-        uav_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
-        uav_id = resolve_uav_id(uav_id, uav_ids)
-        if uav_id is None:
-            self.log.warning(f"MPC port: no drone matches {request.strip()!r}. Known drones: {uav_ids}")
+        # All or nothing: every drone of a group must be known, free and connected
+        known_ids = list(self.app.object_registry.ids_by_type(CrazyflieUAV))
+        uav_ids = [resolve_uav_id(uav_id, known_ids) for uav_id in requested_ids]
+        if None in uav_ids:
+            self.log.warning(f"MPC port: no drone matches {requested_ids[uav_ids.index(None)]!r} in "
+                             f"{request.strip()!r}. Known drones: {known_ids}")
             await stream.send_all(b"ACK_00")
             return
-        if uav_id in self.mpc_sessions:
-            self.log.warning(f"Drone {uav_id} already has an MPC client.")
+        if len(set(uav_ids)) != len(uav_ids):
+            self.log.warning(f"MPC port: {request.strip()!r} names a drone twice.")
+            await stream.send_all(b"ACK_00")
+            return
+        busy = [uav_id for uav_id in uav_ids if uav_id in self.mpc_sessions]
+        if busy:
+            self.log.warning(f"Drone(s) {', '.join(busy)} already have an MPC client.")
             await stream.send_all(b"ACK_00")
             return
         try:
-            uav: CrazyflieUAV = self.app.object_registry.find_by_id(uav_id)
-            session = MpcSession(uav, stream, self.log, policy, policy_arg, log_hz,
-                                 log_profile or "mpc")
-        except (KeyError, RuntimeError) as exc:  # RuntimeError: the drone is in the registry but not connected
-            self.log.warning(f"Drone {uav_id} is not available for MPC streaming: {exc!r}")
+            uavs: List[CrazyflieUAV] = [self.app.object_registry.find_by_id(uav_id) for uav_id in uav_ids]
+            session = MpcSession(uavs, stream, self.log, policy, policy_arg, log_hz, log_profile or "mpc")
+        except (KeyError, RuntimeError) as exc:  # RuntimeError: a drone is in the registry but not connected
+            self.log.warning(f"Drone(s) {', '.join(uav_ids)} not available for MPC streaming: {exc!r}")
             await stream.send_all(b"ACK_00")
             return
-        self.mpc_sessions[uav_id] = session
+        for uav_id in uav_ids:
+            self.mpc_sessions[uav_id] = session
         try:
-            self.log.info(f"MPC client connected to drone {uav_id}, end of session policy: {policy}"
+            self.log.info(f"MPC client connected to {session.name}, end of session policy: {policy}"
                           + (f", onboard log '{log_profile}' at {log_hz:g} Hz." if log_hz else "."))
-            await stream.send_all(f"ACK_{uav_id}".encode("utf-8"))
+            await stream.send_all(f"ACK_{','.join(uav_ids)}".encode("utf-8"))
             await session.run()
         finally:
-            del self.mpc_sessions[uav_id]
+            for uav_id in uav_ids:
+                del self.mpc_sessions[uav_id]
 
     async def _broadcast(self, stream: trio.SocketStream, port: int):
         streams = self.ports[port].streams

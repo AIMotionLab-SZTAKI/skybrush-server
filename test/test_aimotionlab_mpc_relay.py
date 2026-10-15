@@ -13,6 +13,7 @@ from flockwave.server.ext.aimotionlab.mpc_relay import (
     MPC_LOG_BLOCKS,
     MPC_LOG_PROFILES,
     split_mpc_options,
+    split_uav_ids,
     MpcSession,
     parse_mpc_request,
     resolve_uav_id,
@@ -89,23 +90,25 @@ class FakeLog:
 
 
 class FakeCrazyflie:
-    def __init__(self, send_delay: float = 0.0, log_fails: bool = False):
+    def __init__(self, send_delay: float = 0.0, log_fails: bool = False, fail_after=None):
         self.packets = []
         self.calls = []
         self.send_delay = send_delay
+        self.fail_after = fail_after  # radio error after this many packets
         self.high_level_commander = FakeHighLevelCommander(self.calls)
         self.log = FakeLog(self.calls, log_fails)
 
     async def send_packet(self, port, channel, data):
         await trio.sleep(self.send_delay)
+        if self.fail_after is not None and len(self.packets) >= self.fail_after:
+            raise OSError("radio link lost")
         self.packets.append((port, channel, bytes(data)))
 
 
 class FakeUAV:
-    id = "07"
-
-    def __init__(self, cf):
+    def __init__(self, cf, id="07"):
         self.cf = cf
+        self.id = id
 
     def _get_crazyflie(self):
         return self.cf
@@ -332,3 +335,148 @@ async def test_indi_log_profile_streams_its_blocks():
 
     assert {r["block"] for r in records} == set(MPC_LOG_PROFILES["indi"])
     assert "indi.u1" in next(r for r in records if r["block"] == "i1")
+
+
+def setpoints(cf):
+    return [p[2] for p in cf.packets if p[:2] == (7, 0)]
+
+
+def group(seq: int, n: int = 2) -> bytes:
+    """Group frame: drone k gets thrust seq + k / 10, so that the frames of different drones and ticks differ."""
+    return b"".join(frame(seq + k / 10) for k in range(n))
+
+
+def test_split_uav_ids():
+    assert split_uav_ids("07") == ["07"]
+    assert split_uav_ids("07,08") == ["07", "08"]
+    for bad in ("07,", ",07", "07,,08", "07,07"):
+        with raises(ValueError):
+            split_uav_ids(bad)
+    assert parse_mpc_request("REQ_07,08_hover_2") == ("07,08", "hover", 2.0)
+
+
+def make_group(n=2, **kwds):
+    cfs = [FakeCrazyflie(**kwds) for _ in range(n)]
+    return cfs, [FakeUAV(cf, f"0{7 + k}") for k, cf in enumerate(cfs)]
+
+
+async def test_group_frames_split_across_reads_reach_each_drone_and_all_land():
+    cfs, uavs = make_group()
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "land", 0.3)
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(session.run)
+        data = group(1) + group(2)
+        for chunk in (data[:10], data[10:40], data[40:60], data[60:]):
+            await client.send_all(chunk)
+            await trio.sleep(0.01)
+        await client.send_all(b"\x00")
+
+    for k, cf in enumerate(cfs):
+        assert setpoints(cf) == [frame(1 + k / 10), frame(2 + k / 10)]
+        assert cf.packets[-1] == (7, 1, struct.pack("<BI", 0, 0))
+        assert cf.calls == [("land", 0.3)]
+    assert session.frames_received == session.frames_sent == 2
+
+
+async def test_incomplete_group_frame_is_not_relayed():
+    cfs, uavs = make_group()
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "none", None)
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(session.run)
+        await client.send_all(frame(1))  # drone 07's frame only
+        await trio.sleep(0.05)
+        assert all(setpoints(cf) == [] for cf in cfs)
+        await client.send_all(frame(1.1))
+        await trio.sleep(0.05)
+        await client.send_all(b"\x00")
+
+    assert [setpoints(cf) for cf in cfs] == [[frame(1)], [frame(1.1)]]
+
+
+async def test_group_mixes_frame_types_between_drones():
+    cfs, uavs = make_group()
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "none", None)
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(session.run)
+        await client.send_all(indi_frame(1) + frame(1))
+        await trio.sleep(0.02)
+        await client.send_all(b"\x00")
+
+    assert [setpoints(cf) for cf in cfs] == [[indi_frame(1)], [frame(1)]]
+
+
+async def test_busy_radio_sends_latest_group_frame_only():
+    cfs, uavs = make_group(send_delay=0.05)
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "none", None)
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(session.run)
+        await client.send_all(group(1))
+        await trio.sleep(0.01)
+        await client.send_all(group(2) + group(3) + group(4))
+        await trio.sleep(0.2)
+        await client.send_all(b"\x00")
+
+    # the drones always get the same tick
+    for k, cf in enumerate(cfs):
+        assert setpoints(cf) == [frame(1 + k / 10), frame(4 + k / 10)]
+    assert session.frames_received == 4 and session.frames_sent == 2
+
+
+async def test_stream_timeout_ends_the_group_with_hover_on_every_drone():
+    cfs, uavs = make_group()
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "hover", 0.01)
+    with trio.fail_after(2):
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(session.run)
+            await client.send_all(group(1))
+
+    for cf in cfs:
+        assert cf.calls == [("go_to", (0.0, 0.0, 0.0), True), ("land", 0.5)]
+
+
+async def test_radio_error_on_one_drone_ends_the_group_and_lands_the_others():
+    cfs, uavs = make_group(3)
+    cfs[1].fail_after = 1  # drone 08 loses its link after the first setpoint
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "land", 0.3)
+    with trio.fail_after(2):
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(session.run)
+            for seq in range(1, 4):
+                await client.send_all(group(seq, 3))
+                await trio.sleep(0.01)
+            # the client keeps streaming, but the session is over: the server no longer reads
+            await trio.sleep(0.05)
+            await client.aclose()
+
+    assert session.frames_sent == 1
+    assert cfs[0].calls == cfs[2].calls == [("land", 0.3)]
+    assert cfs[1].calls == []  # could not be handed over: its own firmware timeout takes over
+    for cf in (cfs[0], cfs[2]):
+        assert cf.packets[-1] == (7, 1, struct.pack("<BI", 0, 0))
+
+
+async def test_group_log_records_are_tagged_with_the_drone():
+    cfs, uavs = make_group()
+    client, server = memory_stream_pair()
+    session = MpcSession(uavs, server, log, "none", None, log_hz=50.0, log_profile="cf")
+    records = []
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(session.run)
+        nursery.start_soon(read_lines, client, records)
+        await client.send_all(group(1))
+        await trio.sleep(0.05)
+        await client.send_all(b"\x00")
+        await trio.sleep(0.05)
+        await client.aclose()
+
+    for uav in uavs:
+        mine = [r for r in records if r["drone"] == uav.id]
+        assert len(mine) == 3 * len(MPC_LOG_PROFILES["cf"])
+        assert "ctrlMpc.rx" in next(r for r in mine if r["block"] == "c1")
+    assert all(cf.calls == ["log_start", "log_stop"] for cf in cfs)
